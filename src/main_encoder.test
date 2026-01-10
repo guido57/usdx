@@ -1,0 +1,45 @@
+// Input test for ESP32-S3 rotary encoder and buttons
+#include <Arduino.h>
+#include "configuration.h"
+#include "encoder.h"
+
+Encoder encoder;
+
+// Callback for encoder rotation
+void onEncoderRotate(int8_t direction) {
+  Serial.print("Encoder: ");
+  Serial.print(direction > 0 ? "CW" : "CCW");
+  Serial.print("  Position: ");
+  Serial.println(encoder.getPosition());
+}
+
+// Callback for button presses
+void onButtonPress(uint8_t buttonId, bool pressed) {
+  const char* buttonNames[] = {"ROT_SW", "L_SW", "R_SW"};
+  
+  Serial.print(buttonNames[buttonId]);
+  Serial.println(pressed ? " pressed" : " released");
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  
+  Serial.println("\n=== ESP32-S3 Input Test (Class-based) ===");
+  Serial.println("Initializing encoder and buttons...");
+  
+  // Initialize encoder with GPIO pins from configuration.h
+  encoder.begin(GPIO_ROT_A, GPIO_ROT_B, GPIO_ROT_SW, 
+                GPIO_L_SW, GPIO_R_SW);
+  
+  // Set up callbacks
+  encoder.onRotate(onEncoderRotate);
+  encoder.onButton(onButtonPress);
+  
+  Serial.println("Ready! Turn encoder or press buttons.\n");
+}
+
+void loop() {
+  encoder.update();
+  delay(1);
+}
