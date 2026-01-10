@@ -1,0 +1,39 @@
+// Minimal SI5351 test for ESP32
+#include <Arduino.h>
+#include <Wire.h>
+
+#include "configuration.h"
+#include "phy/si5351.h"
+
+static SI5351 si5351;
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  // Init I2C on specified pins for ESP32-S3
+  Wire.begin(42, 41);
+  Wire.setClock(400000);
+
+  Serial.println("SI5351 test starting");
+
+  // Disable outputs before configuring
+  si5351.powerDown();
+
+  // Drive CLK0/CLK1 at 10 MHz with 90° phase shift, CLK2 at 10.05 MHz
+  si5351.freq(10000000, 0, 90);
+  si5351.freqb(10050000);
+  si5351.oe(0b00000111);  // Enable CLK0, CLK1, CLK2
+
+  Serial.println("Configured SI5351: CLK0/1 10 MHz I/Q, CLK2 10.05 MHz");
+}
+
+void loop() {
+  static uint32_t last = 0;
+  if (millis() - last >= 1000) {
+    uint8_t status = si5351.RecvRegister(0); // status register
+    Serial.print("Status reg 0x00: 0x");
+    Serial.println(status, HEX);
+    last = millis();
+  }
+}

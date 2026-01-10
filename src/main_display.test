@@ -1,0 +1,48 @@
+// SSD1309 OLED test for ESP32-S3 using Display class
+#include <Arduino.h>
+#include <Wire.h>
+#include "configuration.h"
+#include "display.h"
+
+
+
+Display oled(I2C_SDA, I2C_SCL, 0x3C); // 0x78 >> 1
+
+void setup() {
+  Serial.begin(115200);
+  delay(3000);
+
+  Serial.println("\n=== SSD1309 OLED Test (Class) ===");
+
+  // Initialize shared I2C bus once
+  Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.setClock(400000);
+
+  if (!oled.begin()) {
+    Serial.println("Display init failed. Scanning I2C bus...");
+    for (uint8_t addr = 1; addr < 127; addr++) {
+      Wire.beginTransmission(addr);
+      if (Wire.endTransmission() == 0) {
+        Serial.print("Found device at 0x");
+        Serial.println(addr, HEX);
+      }
+    }
+    while (true) delay(1000);
+  }
+
+  oled.showTestPattern();
+  Serial.println("Test pattern displayed");
+}
+
+void loop() {
+  static uint32_t counter = 0;
+  static uint32_t lastUpdate = 0;
+
+  if (millis() - lastUpdate >= 1000) {
+    lastUpdate = millis();
+    counter++;
+    oled.showCounter(counter);
+    Serial.print("Counter: ");
+    Serial.println(counter);
+  }
+}
