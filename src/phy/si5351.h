@@ -25,6 +25,7 @@ struct Si5351RxSynthState {
   int16_t rit;
   bool ritActive;
   int16_t cwOffset;
+  int16_t iqPhase;
 };
 
 static inline bool synthStateChanged(const Si5351RxSynthState& a, const Si5351RxSynthState& b) {
@@ -34,6 +35,7 @@ static inline bool synthStateChanged(const Si5351RxSynthState& a, const Si5351Rx
   if (a.ritActive != b.ritActive) return true;
   if (a.rit != b.rit) return true;
   if (a.cwOffset != b.cwOffset) return true;
+  if (a.iqPhase != b.iqPhase) return true;
   return false;
 }
 
@@ -104,7 +106,8 @@ public:
     if (_i2c_error) return;
     uint16_t msa; uint32_t msb, msc, msp1, msp2, msp3;
     msa = div_nom / div_denom;     // integer part: msa must be in range 15..90 for PLL, 8+1/1048575..900 for MS
-    if(msa == 4) _int = 1;  // To satisfy the MSx_INT=1 requirement of AN619, section 4.1.3 which basically says that for MS divider a value of 4 and integer mode must be used
+    // Force fractional mode if phase is non-zero to allow phase adjustment
+    if(msa == 4 && phase == 0) _int = 1;  // To satisfy the MSx_INT=1 requirement of AN619, section 4.1.3 which basically says that for MS divider a value of 4 and integer mode must be used
     msb = (_int) ? 0 : (((uint64_t)(div_nom % div_denom)*_MSC) / div_denom); // fractional part
     msc = (_int) ? 1 : _MSC;
     //lcd.setCursor(0, 0); lcd.print(n); lcd.print(":"); lcd.print(msa); lcd.print(" "); lcd.print(msb); lcd.print(" "); lcd.print(msc); lcd.print(F("    ")); delay(500);
@@ -148,6 +151,12 @@ public:
       //ms(MSNB, fvcoa, fxtal);
       ms(MS0,  fvcoa, fout, PLLA, 0, i, rdiv);  // Multisynth stage with integer divider but in frac mode due to phase setting
       ms(MS1,  fvcoa, fout, PLLA, 0, q, rdiv);
+      
+      // Debug: print phase programming info
+      uint16_t msa = fvcoa / fout;
+      Serial.printf("[SI5351] fout=%ld Hz, d=%d, fvcoa=%ld Hz, msa=%d, i_phase=%d deg, q_phase=%d deg, i_reg=%d, q_reg=%d\n", 
+                    fout, d, fvcoa, msa, i, q, i*msa/90, q*msa/90);
+      
 #ifdef F_CLK2
       freqb(F_CLK2);
 #else
@@ -205,7 +214,9 @@ static inline int32_t programSi5351Rx(SI5351& si5351, const Si5351RxSynthState& 
   // - USB: si5351.freq(freq, 0, rx_ph_q)
   // - CW : si5351.freq(freq + cw_offset, rx_ph_q, 0)
   // - RIT applied via freq_calc_fast() + SendPLLRegisterBulk()
-  const uint16_t rx_ph_q = 90;
+  
+  // Use IQ phase from state structure
+  const uint16_t rx_ph_q = s.iqPhase;
 
   const int32_t baseFreq = s.vfoHz;
   int32_t freq = baseFreq;

@@ -4,7 +4,7 @@
 
 // CIC (Cascaded Integrator-Comb) decimating filter
 // Ported from main.ori (lines 3044-3061)
-// 3rd-order CIC with decimation by 4 (processes 8 samples, outputs 1 I/Q pair)
+// 3rd-order CIC with decimation by 4 (4-phase cycle)
 
 class CicFilter {
 public:
@@ -34,7 +34,7 @@ private:
   // Input interpolation state (from main.ori sdr_rx_common_i/q)
   int16_t i_prev, q_prev;
   
-  // State machine counter (0-7)
+  // State machine counter (0-3)
   uint8_t phase;
   
   // Output values
