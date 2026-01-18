@@ -205,6 +205,11 @@ static void adcReaderTask(void*) {
   // Use a large local buffer to drain DMA efficiently.
   static uint8_t rawBuf[IQ_ADC_DMA_FRAME_BYTES];
 
+  // ADC noise measurement at GPIO level
+  static uint32_t gpio6_samples = 0, gpio7_samples = 0;
+  static int64_t gpio6_sum = 0, gpio7_sum = 0;  // For DC calculation
+  static int64_t gpio6_sum_sq = 0, gpio7_sum_sq = 0;
+
   uint32_t lastReport = millis();
   
   for (;;) {
@@ -227,12 +232,32 @@ static void adcReaderTask(void*) {
       continue;
     }
     
-    // Debug report every 5 seconds
-    if ((millis() - lastReport) >= 5000) {
-      Serial.printf("[ADC Task] reads=%u, errors=%u, zeroLen=%u, outLen=%u bytes\n", 
-                    adcTotalReads, adcReadErrors, adcZeroLenReads, outLen);
-      Serial.printf("[ADC Task] totalSamples=%u, unitMismatch=%u, pushedPairs=%u\n",
-                    adcTotalSamples, adcUnitMismatch, adcPushedPairs);
+    // Report ADC noise every 5 seconds
+    if (IQ_ADC_NOISE_LOG && (millis() - lastReport) >= 5000) {
+      // Report raw ADC noise levels (AC component only, DC removed)
+      if (gpio6_samples > 0 && gpio7_samples > 0) {
+        // Calculate DC offsets
+        float gpio6_dc = (float)gpio6_sum / gpio6_samples;
+        float gpio7_dc = (float)gpio7_sum / gpio7_samples;
+        
+        // Calculate variance (AC noise squared)
+        float gpio6_var = ((float)gpio6_sum_sq / gpio6_samples) - (gpio6_dc * gpio6_dc);
+        float gpio7_var = ((float)gpio7_sum_sq / gpio7_samples) - (gpio7_dc * gpio7_dc);
+        
+        // RMS of AC component
+        float gpio6_rms = sqrtf(gpio6_var);
+        float gpio7_rms = sqrtf(gpio7_var);
+        
+        Serial.printf("[ADC Noise] GPIO6: %.1f counts (%.1fmV) DC=%.0f | GPIO7: %.1f counts (%.1fmV) DC=%.0f | Ratio: %.2fx\n",
+                      gpio6_rms, gpio6_rms * 0.232, gpio6_dc,
+                      gpio7_rms, gpio7_rms * 0.232, gpio7_dc,
+                      gpio7_rms / gpio6_rms);
+        // Reset for next measurement period
+        gpio6_samples = gpio7_samples = 0;
+        gpio6_sum = gpio7_sum = 0;
+        gpio6_sum_sq = gpio7_sum_sq = 0;
+      }
+      
       lastReport = millis();
     }
 
@@ -250,12 +275,22 @@ static void adcReaderTask(void*) {
 
       if (chan == (uint32_t)adcChanI) {
         const int16_t iRaw = center12bit((int)data);
-        pendingICorr = (int16_t)((prevIRaw + iRaw) / 2);
+        // Track GPIO6 noise (AC component)
+        gpio6_samples++;
+        gpio6_sum += iRaw;
+        gpio6_sum_sq += (int32_t)iRaw * (int32_t)iRaw;
+        
+        pendingICorr = iRaw;
         prevIRaw = iRaw;
         havePendingI = true;
       } else if (chan == (uint32_t)adcChanQ) {
         if (!havePendingI) continue;
         const int16_t q = center12bit((int)data);
+        // Track GPIO7 noise (AC component)
+        gpio7_samples++;
+        gpio7_sum += q;
+        gpio7_sum_sq += (int32_t)q * (int32_t)q;
+        
         const int16_t iAc = dcDecouple(pendingICorr, &dcI);
         const int16_t qAc = dcDecouple(q, &dcQ);
         ringPush({ iAc, qAc });

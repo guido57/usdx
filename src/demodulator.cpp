@@ -11,7 +11,7 @@ static int16_t v_q[14];
 static int16_t v_i[7];
 
 // State for AM DC decoupling
-static int16_t am_dc = 0;
+static int32_t am_dc = 0;
 
 // State for FM demodulator
 static int16_t fm_zi = 0;
@@ -24,14 +24,14 @@ void demod_init() {
   fm_zi = 0;
 }
 
-// Simple magnitude approximation from main.ori
-static inline int16_t magn(int16_t i, int16_t q) {
-  i = abs(i);
-  q = abs(q);
-  if (i > q) {
-    return i + (q >> 1) - (i >> 4);
+// Simple magnitude approximation from main.ori, 32-bit safe
+static inline int32_t magn32(int16_t i, int16_t q) {
+  int32_t ii = abs(i);
+  int32_t qq = abs(q);
+  if (ii > qq) {
+    return ii + (qq >> 1) - (ii >> 4);
   } else {
-    return q + (i >> 1) - (q >> 4);
+    return qq + (ii >> 1) - (qq >> 4);
   }
 }
 
@@ -60,8 +60,10 @@ int16_t demod_process(int16_t i_sample, int16_t q_sample, DemodMode mode) {
   }
   v_i[6] = i_sample;
   
-  // Store current I and Q for AM/FM modes
-  int16_t i = i_delayed;
+  // Store aligned I/Q samples
+  // - SSB uses delayed I + Hilbert Q (qh)
+  // - AM/FM should use current I/Q (no delay skew)
+  int16_t i = i_sample;
   int16_t q = q_sample;
   
   // Demodulate based on mode
@@ -69,20 +71,25 @@ int16_t demod_process(int16_t i_sample, int16_t q_sample, DemodMode mode) {
     case DEMOD_LSB:
       // LSB: -i - qh (from main.ori line 2992)
       // Inverting I and Q helps dampen feedback-loop between PWM out and ADC inputs
-      ac = -i - qh;
+      ac = -i_delayed - qh;
       break;
       
     case DEMOD_USB:
       // USB: i + qh (from main.ori line 3156)
-      ac = i + qh;
+      ac = i_delayed + qh;
       break;
       
     case DEMOD_AM:
       // AM envelope detection (from main.ori lines 2795-2800)
-      ac = magn(i, q);
-      // DC decoupling
-      am_dc += (ac - am_dc) / 2;
-      ac = ac - am_dc;
+      {
+        int32_t ac32 = magn32(i, q);
+        // DC decoupling
+        am_dc += (ac32 - am_dc) / 2;
+        ac32 = ac32 - am_dc;
+        if (ac32 > INT16_MAX) ac32 = INT16_MAX;
+        if (ac32 < INT16_MIN) ac32 = INT16_MIN;
+        ac = (int16_t)ac32;
+      }
       break;
       
     case DEMOD_FM:

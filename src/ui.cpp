@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <Preferences.h>
+#include <string.h>
 
 #include "configuration.h"
 #include "display.h"
@@ -9,8 +11,8 @@
 #include "phy/si5351.h"
 
 // --- Core UI state (trimmed from main.ori but behaviorally similar) ---
-enum Mode { LSB = 0, USB, CW, FM, AM, N_MODES };
-static const char* kModeLabel[] = { "LSB", "USB", "CW", "FM", "AM" };
+enum Mode { LSB = 0, USB, CW, AM, N_MODES };
+static const char* kModeLabel[] = { "LSB", "USB", "CW", "AM" };
 
 enum Step { STEP_10M, STEP_1M, STEP_500k, STEP_100k, STEP_10k, STEP_1k, STEP_500, STEP_100, STEP_10, STEP_1 };
 static const uint32_t kStepValues[] = { 10000000UL, 1000000UL, 500000UL, 100000UL, 10000UL, 1000UL, 500UL, 100UL, 10UL, 1UL };
@@ -46,6 +48,10 @@ static int16_t txdelay = 0;
 static int8_t mox = 0;
 static int8_t backlight = 1;
 static int32_t sifxtal = (int32_t)F_XTAL;
+static int16_t iq_phase = 90;  // IQ phase adjustment for sideband rejection
+static int16_t iq_balance = 100;  // IQ amplitude balance (100 = 1.00x, range 80-120 = 0.80x-1.20x)
+static int16_t iq_delay = 0;  // IQ fractional delay in 0.01 samples (-50..50 => -0.50..+0.50)
+static int8_t wf_thresh = 40; // Waterfall threshold (0-100)
 
 static bool change = true;  // force initial draw
 
@@ -55,7 +61,6 @@ const char* ui_mode_label(UiMode m) {
     case UI_LSB: return "LSB";
     case UI_USB: return "USB";
     case UI_CW:  return "CW";
-    case UI_FM:  return "FM";
     case UI_AM:  return "AM";
     default:     return "?";
   }
@@ -66,7 +71,6 @@ uint8_t ui_mode_to_si5351_rx_mode(UiMode m) {
     case UI_LSB: return SI5351_RX_MODE_LSB;
     case UI_USB: return SI5351_RX_MODE_USB;
     case UI_CW:  return SI5351_RX_MODE_CW;
-    case UI_FM:  return SI5351_RX_MODE_FM;
     case UI_AM:  return SI5351_RX_MODE_AM;
     default:     return SI5351_RX_MODE_LSB;
   }
@@ -78,8 +82,13 @@ uint8_t ui_get_vfo_sel() { return vfoSel; }
 bool ui_get_rit_active() { return ritActive; }
 int16_t ui_get_rit() { return rit; }
 int16_t ui_get_cw_offset() { return cw_offset; }
+int16_t ui_get_iq_phase() { return iq_phase; }
+float ui_get_iq_balance() { return iq_balance / 100.0f; }
+float ui_get_iq_delay() { return iq_delay / 100.0f; }
 int32_t ui_get_sifxtal() { return sifxtal; }
 int8_t ui_get_att() { return att; }
+int8_t ui_get_agc() { return agc; }
+int8_t ui_get_wf_thresh() { return wf_thresh; }
 
 int8_t ui_get_filter() { return filt; }
 int8_t ui_get_cw_tone() { return cw_tone; }
@@ -111,6 +120,137 @@ static const uint8_t BTN_E_CODE = 0x30;  // encoder press
 
 static volatile uint8_t pendingEvent = 0;
 static volatile bool eventAvailable = false;
+static bool settingsLoaded = false;
+
+// Waterfall buffer (16 rows x 128 bins, 0..15 intensity)
+static uint8_t waterfallBuf[16][128] = {};
+static bool waterfallDirty = false;
+
+// Settings persistence
+static bool settingsDirty = false;
+static uint32_t settingsLastChangeMs = 0;
+static const uint32_t kSettingsMagic = 0x55534458; // "USDX"
+static const uint8_t kSettingsVersion = 2;
+
+struct UiSettings {
+  uint32_t magic;
+  uint8_t version;
+  uint8_t stepsize;
+  uint8_t vfoSel;
+  uint8_t mode;
+  uint8_t vfomode0;
+  uint8_t vfomode1;
+  int32_t vfoA;
+  int32_t vfoB;
+  int32_t bandval;
+  int16_t rit;
+  uint8_t ritActive;
+  int8_t volume;
+  int8_t filt;
+  int8_t agc;
+  int8_t nr;
+  int8_t att;
+  int8_t smode;
+  int8_t cw_tone;
+  int16_t cw_offset;
+  int8_t vox;
+  int8_t vox_gain;
+  int8_t drive;
+  int16_t txdelay;
+  int8_t mox;
+  int8_t backlight;
+  int32_t sifxtal;
+  int16_t iq_phase;
+  int16_t iq_balance;
+  int16_t iq_delay;
+  int8_t wf_thresh;
+};
+
+static void loadSettings() {
+  Preferences prefs;
+  if (!prefs.begin("usdx", true)) return;
+  UiSettings s = {};
+  const size_t len = prefs.getBytesLength("ui");
+  if (len == sizeof(UiSettings)) {
+    prefs.getBytes("ui", &s, sizeof(UiSettings));
+  }
+  prefs.end();
+
+  if (s.magic != kSettingsMagic || s.version != kSettingsVersion) return;
+
+  stepsize = constrain((int)s.stepsize, (int)STEP_1M, (int)STEP_1);
+  vfoSel = s.vfoSel ? 1 : 0;
+  vfo[0] = constrain(s.vfoA, 1, 999999999);
+  vfo[1] = constrain(s.vfoB, 1, 999999999);
+  bandval = constrain(s.bandval, 0, (int32_t)N_BANDS - 1);
+  rit = constrain(s.rit, (int16_t)-9999, (int16_t)9999);
+  ritActive = (s.ritActive != 0);
+  volume = constrain(s.volume, (int8_t)0, (int8_t)10);
+  filt = constrain(s.filt, (int8_t)0, (int8_t)7);
+  agc = constrain(s.agc, (int8_t)0, (int8_t)1);
+  nr = constrain(s.nr, (int8_t)0, (int8_t)1);
+  att = constrain(s.att, (int8_t)0, (int8_t)2);
+  smode = constrain(s.smode, (int8_t)0, (int8_t)6);
+  cw_tone = constrain(s.cw_tone, (int8_t)0, (int8_t)5);
+  cw_offset = constrain(s.cw_offset, (int16_t)300, (int16_t)1200);
+  vox = constrain(s.vox, (int8_t)0, (int8_t)1);
+  vox_gain = constrain(s.vox_gain, (int8_t)0, (int8_t)100);
+  drive = constrain(s.drive, (int8_t)0, (int8_t)10);
+  txdelay = constrain(s.txdelay, (int16_t)0, (int16_t)500);
+  mox = constrain(s.mox, (int8_t)0, (int8_t)1);
+  backlight = constrain(s.backlight, (int8_t)0, (int8_t)1);
+  sifxtal = constrain(s.sifxtal, 10000000, 40000000);
+  iq_phase = constrain(s.iq_phase, (int16_t)30, (int16_t)150);
+  iq_balance = constrain(s.iq_balance, (int16_t)50, (int16_t)150);
+  iq_delay = constrain(s.iq_delay, (int16_t)-50, (int16_t)50);
+  wf_thresh = constrain(s.wf_thresh, (int8_t)0, (int8_t)100);
+
+  mode = static_cast<Mode>(constrain((int)s.mode, 0, (int)N_MODES - 1));
+  vfomode[0] = static_cast<Mode>(constrain((int)s.vfomode0, 0, (int)N_MODES - 1));
+  vfomode[1] = static_cast<Mode>(constrain((int)s.vfomode1, 0, (int)N_MODES - 1));
+
+  settingsLoaded = true;
+}
+
+static void saveSettings() {
+  UiSettings s = {};
+  s.magic = kSettingsMagic;
+  s.version = kSettingsVersion;
+  s.stepsize = stepsize;
+  s.vfoSel = vfoSel;
+  s.mode = (uint8_t)mode;
+  s.vfomode0 = (uint8_t)vfomode[0];
+  s.vfomode1 = (uint8_t)vfomode[1];
+  s.vfoA = vfo[0];
+  s.vfoB = vfo[1];
+  s.bandval = bandval;
+  s.rit = rit;
+  s.ritActive = ritActive ? 1 : 0;
+  s.volume = volume;
+  s.filt = filt;
+  s.agc = agc;
+  s.nr = nr;
+  s.att = att;
+  s.smode = smode;
+  s.cw_tone = cw_tone;
+  s.cw_offset = cw_offset;
+  s.vox = vox;
+  s.vox_gain = vox_gain;
+  s.drive = drive;
+  s.txdelay = txdelay;
+  s.mox = mox;
+  s.backlight = backlight;
+  s.sifxtal = sifxtal;
+  s.iq_phase = iq_phase;
+  s.iq_balance = iq_balance;
+  s.iq_delay = iq_delay;
+  s.wf_thresh = wf_thresh;
+
+  Preferences prefs;
+  if (!prefs.begin("usdx", false)) return;
+  prefs.putBytes("ui", &s, sizeof(UiSettings));
+  prefs.end();
+}
 
 // --- Helpers ---
 static int32_t currentFreq() { return vfo[vfoSel]; }
@@ -179,6 +319,10 @@ static int32_t param_txdelay = txdelay;
 static int32_t param_mox = mox;
 static int32_t param_backlight = backlight;
 static int32_t param_sifxtal = sifxtal;
+static int32_t param_iq_phase = iq_phase;
+static int32_t param_iq_balance = iq_balance;
+static int32_t param_iq_delay = iq_delay;
+static int32_t param_wf_thresh = wf_thresh;
 
 static const char* const kOnOffLabel[] = { "OFF", "ON" };
 static const char* const kSmodeLabel[] = { "OFF", "dBm", "S", "BAR", "WPM", "VSS", "CLK" };
@@ -212,6 +356,10 @@ static Param params[] = {
   { "MOX",       &param_mox,       0, 1, true,            P_BOOL, kOnOffLabel, 2 },
   { "Backlight", &param_backlight, 0, 1, true,            P_BOOL, kOnOffLabel, 2 },
   { "SI Fxtal",  &param_sifxtal,   10000000, 40000000, false,    P_INT,  nullptr, 0 },
+  { "IQ Phase",  &param_iq_phase,  30, 150, false,       P_INT,  nullptr, 0 },
+  { "IQ Bal",    &param_iq_balance, 50, 150, false,      P_INT,  nullptr, 0 },
+  { "IQ Delay",  &param_iq_delay,  -50, 50, false,       P_INT,  nullptr, 0 },
+  { "WF Thresh", &param_wf_thresh, 0, 100, false,       P_INT,  nullptr, 0 },
 };
 
 static const uint8_t N_PARAMS = sizeof(params) / sizeof(params[0]);
@@ -260,6 +408,9 @@ static void syncParamsToState() {
   param_mox = mox;
   param_backlight = backlight;
   param_sifxtal = sifxtal;
+  param_iq_delay = iq_delay;
+  param_wf_thresh = wf_thresh;
+  // param_iq_phase retains its adjusted value
 }
 
 static void applyParamToState() {
@@ -288,6 +439,10 @@ static void applyParamToState() {
   mox = static_cast<int8_t>(constrain(param_mox, 0, 1));
   backlight = static_cast<int8_t>(constrain(param_backlight, 0, 1));
   sifxtal = constrain(param_sifxtal, 10000000, 40000000);
+  iq_phase = static_cast<int16_t>(constrain(param_iq_phase, 30, 150));
+  iq_balance = static_cast<int16_t>(constrain(param_iq_balance, 50, 150));
+  iq_delay = static_cast<int16_t>(constrain(param_iq_delay, -50, 50));
+  wf_thresh = static_cast<int8_t>(constrain(param_wf_thresh, 0, 100));
 
   // Mode is stored per VFO like main.ori
   mode = static_cast<Mode>(param_mode);
@@ -355,16 +510,28 @@ static void renderHome() {
   lcd.raw().print(formatFrequency(currentFreq()));
 
   lcd.setCursor(0, 32);
-  lcd.raw().print(F("RIT "));
-  lcd.raw().print(ritActive ? rit : 0);
-
-  lcd.setCursor(0, 40);
   lcd.raw().print(F("Step "));
   lcd.raw().print(kStepLabel[stepsize]);
 
-  lcd.setCursor(0, 48);
+  lcd.setCursor(0, 40);
   lcd.raw().print(F("Vol  "));
   lcd.raw().print(volume);
+
+  // Waterfall area (bottom 16 pixels)
+  lcd.raw().fillRect(0, 48, 128, 16, SSD1306_BLACK);
+  static const uint8_t dither[2][2] = { {0, 2}, {3, 1} };
+  for (uint8_t y = 0; y < 16; ++y) {
+    for (uint8_t x = 0; x < 128; ++x) {
+      const uint8_t level = waterfallBuf[y][x] >> 2; // 0..3
+      if (level > dither[y & 1][x & 1]) {
+        lcd.raw().drawPixel(x, 48 + y, SSD1306_WHITE);
+      }
+    }
+  }
+
+  // Center frequency marker (inverted triangle at x=64)
+  lcd.raw().fillTriangle(64, 48, 61, 53, 67, 53, SSD1306_BLACK);
+  lcd.raw().drawTriangle(64, 48, 61, 53, 67, 53, SSD1306_WHITE);
 
   lcd.flush();
 }
@@ -566,7 +733,17 @@ void ui_setup() {
   encoder.onRotate(handleRotate);
   encoder.onButton(handleButton);
 
+  if (!settingsLoaded) {
+    loadSettings();
+    syncParamsToState();
+  }
   renderHome();
+}
+
+void ui_load_settings() {
+  if (settingsLoaded) return;
+  loadSettings();
+  syncParamsToState();
 }
 
 void ui_loop() {
@@ -579,9 +756,32 @@ void ui_loop() {
   }
 
   if (change) {
+    settingsDirty = true;
+    settingsLastChangeMs = millis();
     change = false;
     if (menumode == 0) renderHome(); else renderMenu();
+  } else if (waterfallDirty && menumode == 0) {
+    waterfallDirty = false;
+    renderHome();
+  }
+
+  if (settingsDirty && (uint32_t)(millis() - settingsLastChangeMs) > 1500U) {
+    saveSettings();
+    settingsDirty = false;
   }
 
   delay(1);  // Small delay to avoid tight loop, matches working encoder test
+}
+
+void ui_set_waterfall_line(const uint8_t* bins, size_t count) {
+  if (!bins || count == 0) return;
+  const size_t n = (count > 128) ? 128 : count;
+  memmove(&waterfallBuf[0][0], &waterfallBuf[1][0], 15 * 128);
+  for (size_t x = 0; x < n; ++x) {
+    waterfallBuf[15][x] = bins[x];
+  }
+  for (size_t x = n; x < 128; ++x) {
+    waterfallBuf[15][x] = 0;
+  }
+  waterfallDirty = true;
 }

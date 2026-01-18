@@ -10,8 +10,8 @@
 #define GPIO_R_SW      14  // GPIO pin for right pushbutton switch
 
 // I2C pins (shared bus for all devices)
-#define I2C_SDA 42
-#define I2C_SCL 41
+#define I2C_SDA 41
+#define I2C_SCL 42
 
 // SI5351 configuration (used by src/phy/si5351.h)
 #ifndef F_XTAL
@@ -86,11 +86,21 @@
 	#define IQ_ADC_TASK_CORE -1
 #endif
 
+// Set to 1 to print ADC noise stats every 5 seconds.
+#ifndef IQ_ADC_NOISE_LOG
+  #define IQ_ADC_NOISE_LOG 0
+#endif
+
+// Set to 1 to enable image rejection / IQ debug logs in main loop.
+#ifndef IQ_MEASURE_LOG
+	#define IQ_MEASURE_LOG 1
+#endif
+
 // I2S Audio Output (MAX98357 amplifier)
 // GPIO pins for I2S (MAX98357)
 #define GPIO_I2S_LRC   15  // Left/Right clock (word select)
 #define GPIO_I2S_BCLK  16  // Bit clock
 #define GPIO_I2S_DOUT  17  // Data out
 
-// Audio sample rate (7.8kHz matches DSP output rate, rounded to 8kHz)
-#define AUDIO_I2S_SAMPLE_RATE 8013
+// Audio sample rate (8kHz for 4kHz bandwidth)
+#define AUDIO_I2S_SAMPLE_RATE 8000
