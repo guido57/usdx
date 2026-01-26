@@ -1,28 +1,27 @@
 // CIC (Cascaded Integrator-Comb) decimating filter
-// Ported from main.ori (lines 3044-3061)
-// 3rd-order CIC with decimation by 4
+// 3rd-order CIC with decimation by 4 (synchronous I/Q)
 
 #include "cic_filter.h"
 
-#define M_SR 1  // CIC shift right amount (from main.ori)
+static constexpr uint8_t CIC_DECIM = 4;
 
 CicFilter::CicFilter() {
   reset();
 }
 
 void CicFilter::reset() {
-  i_s0za1 = i_s0zb0 = i_s0zb1 = 0;
-  i_s1za1 = i_s1zb0 = i_s1zb1 = 0;
-  q_s0za1 = q_s0zb0 = q_s0zb1 = 0;
-  q_s1za1 = q_s1zb0 = q_s1zb1 = 0;
+  i_int1 = i_int2 = i_int3 = 0;
+  q_int1 = q_int2 = q_int3 = 0;
+  i_c1_z = i_c2_z = i_c3_z = 0;
+  q_c1_z = q_c2_z = q_c3_z = 0;
   i_prev = 0;
   q_prev = 0;
-  phase = 0;
+  decim = 0;
   i_output = 0;
   q_output = 0;
 }
 
-// CIC filter - 4 phases for decimation by 4
+// CIC filter - decimate by 4 on I/Q pairs
 bool CicFilter::processSample(int16_t iSample, int16_t qSample) {
   bool outputReady = false;
   
@@ -31,39 +30,30 @@ bool CicFilter::processSample(int16_t iSample, int16_t qSample) {
   int16_t q_smooth = (q_prev + qSample) / 2;
   i_prev = iSample;
   q_prev = qSample;
-  
-  switch (phase) {
-    case 0: { // Update delay lines
-      i_s0zb1 = i_s0zb0;
-      i_s0zb0 = i_smooth;
-      break;
-    }
-    
-    case 1: { // Update delay lines
-      q_s0zb1 = q_s0zb0;
-      q_s0zb0 = q_smooth;
-      break;
-    }
-    
-    case 2: { // Compute I output
-      int16_t i_s1za0 = (i_smooth + (i_s0za1 + i_s0zb0) * 3 + i_s0zb1) >> M_SR;
-      i_s0za1 = i_smooth;
-      i_output = (i_s1za0 + (i_s1za1 + i_s1zb0) * 3 + i_s1zb1);
-      i_s1za1 = i_s1za0;
-      break;
-    }
-    
-    case 3: { // Compute Q output and return (both I and Q computed at same phase offset)
-      int16_t q_s1za0 = (q_smooth + (q_s0za1 + q_s0zb0) * 3 + q_s0zb1) >> M_SR;
-      q_s0za1 = q_smooth;
-      q_output = (q_s1za0 + (q_s1za1 + q_s1zb0) * 3 + q_s1zb1);
-      q_s1za1 = q_s1za0;
-      outputReady = true;
-      break;
-    }
+
+  // Integrators at full rate
+  i_int1 += i_smooth;
+  i_int2 += i_int1;
+  i_int3 += i_int2;
+  q_int1 += q_smooth;
+  q_int2 += q_int1;
+  q_int3 += q_int2;
+
+  decim = (uint8_t)((decim + 1) & (CIC_DECIM - 1));
+  if (decim == 0) {
+    // Combs at decimated rate
+    int32_t i_c1 = i_int3 - i_c1_z; i_c1_z = i_int3;
+    int32_t i_c2 = i_c1 - i_c2_z;   i_c2_z = i_c1;
+    int32_t i_c3 = i_c2 - i_c3_z;   i_c3_z = i_c2;
+
+    int32_t q_c1 = q_int3 - q_c1_z; q_c1_z = q_int3;
+    int32_t q_c2 = q_c1 - q_c2_z;   q_c2_z = q_c1;
+    int32_t q_c3 = q_c2 - q_c3_z;   q_c3_z = q_c2;
+
+    i_output = i_c3;
+    q_output = q_c3;
+    outputReady = true;
   }
-  
-  phase = (phase + 1) & 0x03; // Wrap 0-3
-  
+
   return outputReady;
 }
