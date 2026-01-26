@@ -2,6 +2,7 @@
 // Ported from main.ori (lines 2975-3000)
 
 #include "demodulator.h"
+#include "configuration.h"
 #include <Arduino.h>
 
 // Hilbert transform state for Q channel (14 taps)
@@ -82,10 +83,21 @@ int16_t demod_process(int16_t i_sample, int16_t q_sample, DemodMode mode) {
     case DEMOD_AM:
       // AM envelope detection (from main.ori lines 2795-2800)
       {
-        int32_t ac32 = magn32(i, q);
-        // DC decoupling
-        am_dc += (ac32 - am_dc) / 2;
-        ac32 = ac32 - am_dc;
+      int32_t ac32;
+    #if AM_DEMOD_COHERENT
+      // Coherent AM: use I only (avoids 2x frequency on DSB-SC)
+      ac32 = (int32_t)i;
+    #else
+      // Envelope AM (exact magnitude for lower distortion)
+      const float ii = (float)i;
+      const float qq = (float)q;
+      ac32 = (int32_t)sqrtf(ii * ii + qq * qq);
+    #endif
+      // DC decoupling (slow to preserve audio)
+      am_dc += (ac32 - am_dc) >> 8;
+      ac32 = ac32 - am_dc;
+      // AM gain boost to improve audio level
+      ac32 = ac32 << 1; // 2x
         if (ac32 > INT16_MAX) ac32 = INT16_MAX;
         if (ac32 < INT16_MIN) ac32 = INT16_MIN;
         ac = (int16_t)ac32;
