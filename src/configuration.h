@@ -96,6 +96,50 @@
 	#define IQ_MEASURE_LOG 1
 #endif
 
+// Set to 0 to disable AGC processing entirely.
+#ifndef ENABLE_AGC
+	#define ENABLE_AGC 1
+#endif
+
+// AM AGC tuning (applied after demod + filter)
+#ifndef AM_AGC_TARGET
+	#define AM_AGC_TARGET 12000.0f
+#endif
+#ifndef AM_AGC_MAX_GAIN
+	#define AM_AGC_MAX_GAIN 8.0f
+#endif
+#ifndef AM_AGC_MIN_GAIN
+	#define AM_AGC_MIN_GAIN 0.1f
+#endif
+#ifndef AM_AGC_ATTACK
+	#define AM_AGC_ATTACK 0.02f
+#endif
+#ifndef AM_AGC_DECAY
+	#define AM_AGC_DECAY 0.0015f
+#endif
+
+// AM demodulation mode: 1 = coherent (I only), 0 = envelope magnitude
+#ifndef AM_DEMOD_COHERENT
+	#define AM_DEMOD_COHERENT 0
+#endif
+
+// AM demod test mode (internal IQ generator)
+#ifndef AM_TEST_MODE
+	#define AM_TEST_MODE 0
+#endif
+#ifndef AM_TEST_CARRIER_HZ
+	#define AM_TEST_CARRIER_HZ 1000.0f
+#endif
+#ifndef AM_TEST_MOD_HZ
+	#define AM_TEST_MOD_HZ 1000.0f
+#endif
+#ifndef AM_TEST_DEPTH
+	#define AM_TEST_DEPTH 0.7f
+#endif
+#ifndef AM_TEST_AMPLITUDE
+	#define AM_TEST_AMPLITUDE 12000.0f
+#endif
+
 // I2S Audio Output (MAX98357 amplifier)
 // GPIO pins for I2S (MAX98357)
 #define GPIO_I2S_LRC   15  // Left/Right clock (word select)
