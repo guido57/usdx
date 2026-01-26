@@ -122,6 +122,8 @@ static volatile uint8_t pendingEvent = 0;
 static volatile bool eventAvailable = false;
 static bool settingsLoaded = false;
 
+static void syncParamsToState();
+
 // Waterfall buffer (16 rows x 128 bins, 0..15 intensity)
 static uint8_t waterfallBuf[16][128] = {};
 static bool waterfallDirty = false;
@@ -131,40 +133,6 @@ static bool settingsDirty = false;
 static uint32_t settingsLastChangeMs = 0;
 static const uint32_t kSettingsMagic = 0x55534458; // "USDX"
 static const uint8_t kSettingsVersion = 2;
-
-struct UiSettings {
-  uint32_t magic;
-  uint8_t version;
-  uint8_t stepsize;
-  uint8_t vfoSel;
-  uint8_t mode;
-  uint8_t vfomode0;
-  uint8_t vfomode1;
-  int32_t vfoA;
-  int32_t vfoB;
-  int32_t bandval;
-  int16_t rit;
-  uint8_t ritActive;
-  int8_t volume;
-  int8_t filt;
-  int8_t agc;
-  int8_t nr;
-  int8_t att;
-  int8_t smode;
-  int8_t cw_tone;
-  int16_t cw_offset;
-  int8_t vox;
-  int8_t vox_gain;
-  int8_t drive;
-  int16_t txdelay;
-  int8_t mox;
-  int8_t backlight;
-  int32_t sifxtal;
-  int16_t iq_phase;
-  int16_t iq_balance;
-  int16_t iq_delay;
-  int8_t wf_thresh;
-};
 
 static void loadSettings() {
   Preferences prefs;
@@ -210,6 +178,80 @@ static void loadSettings() {
   vfomode[1] = static_cast<Mode>(constrain((int)s.vfomode1, 0, (int)N_MODES - 1));
 
   settingsLoaded = true;
+}
+
+bool ui_get_settings(UiSettings* out) {
+  if (!out) return false;
+  out->magic = kSettingsMagic;
+  out->version = kSettingsVersion;
+  out->stepsize = stepsize;
+  out->vfoSel = vfoSel;
+  out->mode = (uint8_t)mode;
+  out->vfomode0 = (uint8_t)vfomode[0];
+  out->vfomode1 = (uint8_t)vfomode[1];
+  out->vfoA = vfo[0];
+  out->vfoB = vfo[1];
+  out->bandval = bandval;
+  out->rit = rit;
+  out->ritActive = ritActive ? 1 : 0;
+  out->volume = volume;
+  out->filt = filt;
+  out->agc = agc;
+  out->nr = nr;
+  out->att = att;
+  out->smode = smode;
+  out->cw_tone = cw_tone;
+  out->cw_offset = cw_offset;
+  out->vox = vox;
+  out->vox_gain = vox_gain;
+  out->drive = drive;
+  out->txdelay = txdelay;
+  out->mox = mox;
+  out->backlight = backlight;
+  out->sifxtal = sifxtal;
+  out->iq_phase = iq_phase;
+  out->iq_balance = iq_balance;
+  out->iq_delay = iq_delay;
+  out->wf_thresh = wf_thresh;
+  return true;
+}
+
+void ui_apply_settings(const UiSettings& s) {
+  stepsize = constrain((int)s.stepsize, (int)STEP_1M, (int)STEP_1);
+  vfoSel = s.vfoSel ? 1 : 0;
+  vfo[0] = constrain(s.vfoA, 1, 999999999);
+  vfo[1] = constrain(s.vfoB, 1, 999999999);
+  bandval = constrain(s.bandval, 0, (int32_t)N_BANDS - 1);
+  rit = constrain(s.rit, (int16_t)-9999, (int16_t)9999);
+  ritActive = (s.ritActive != 0);
+  volume = constrain(s.volume, (int8_t)0, (int8_t)10);
+  filt = constrain(s.filt, (int8_t)0, (int8_t)7);
+  agc = constrain(s.agc, (int8_t)0, (int8_t)1);
+  nr = constrain(s.nr, (int8_t)0, (int8_t)1);
+  att = constrain(s.att, (int8_t)0, (int8_t)2);
+  smode = constrain(s.smode, (int8_t)0, (int8_t)6);
+  cw_tone = constrain(s.cw_tone, (int8_t)0, (int8_t)5);
+  cw_offset = constrain(s.cw_offset, (int16_t)300, (int16_t)1200);
+  vox = constrain(s.vox, (int8_t)0, (int8_t)1);
+  vox_gain = constrain(s.vox_gain, (int8_t)0, (int8_t)100);
+  drive = constrain(s.drive, (int8_t)0, (int8_t)10);
+  txdelay = constrain(s.txdelay, (int16_t)0, (int16_t)500);
+  mox = constrain(s.mox, (int8_t)0, (int8_t)1);
+  backlight = constrain(s.backlight, (int8_t)0, (int8_t)1);
+  sifxtal = constrain(s.sifxtal, 10000000, 40000000);
+  iq_phase = constrain(s.iq_phase, (int16_t)30, (int16_t)150);
+  iq_balance = constrain(s.iq_balance, (int16_t)50, (int16_t)150);
+  iq_delay = constrain(s.iq_delay, (int16_t)-50, (int16_t)50);
+  wf_thresh = constrain(s.wf_thresh, (int8_t)0, (int8_t)100);
+
+  mode = static_cast<Mode>(constrain((int)s.mode, 0, (int)N_MODES - 1));
+  vfomode[0] = static_cast<Mode>(constrain((int)s.vfomode0, 0, (int)N_MODES - 1));
+  vfomode[1] = static_cast<Mode>(constrain((int)s.vfomode1, 0, (int)N_MODES - 1));
+
+  syncParamsToState();
+  change = true;
+  settingsDirty = true;
+  settingsLastChangeMs = millis();
 }
 
 static void saveSettings() {
