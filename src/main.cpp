@@ -9,6 +9,7 @@
 #include "audio_i2s.h"
 #include "demodulator.h"
 #include "cic_filter.h"
+#include "wifi_config.h"
 #include <math.h>
 
 // PSRAM init functions for manual initialization after I2S
@@ -45,10 +46,27 @@ static void processAudioTest() {
   static int32_t i_dc = 0;
   static int32_t q_dc = 0;
   
-  // Process ALL available IQ samples
+  // Process ALL available IQ samples from ADC (or internal test source)
+#if AM_TEST_MODE
+  static float test_car_phase = 0.0f;
+  static float test_mod_phase = 0.0f;
+  const float car_step = 2.0f * (float)M_PI * AM_TEST_CARRIER_HZ / 32000.0f;
+  const float mod_step = 2.0f * (float)M_PI * AM_TEST_MOD_HZ / 32000.0f;
+  for (uint16_t n = 0; n < 128; ++n) {
+    const float env = 1.0f + AM_TEST_DEPTH * sinf(test_mod_phase);
+    const float i_f = env * cosf(test_car_phase) * AM_TEST_AMPLITUDE;
+    const float q_f = env * sinf(test_car_phase) * AM_TEST_AMPLITUDE;
+    IqSample sample = { (int16_t)i_f, (int16_t)q_f };
+    test_car_phase += car_step;
+    test_mod_phase += mod_step;
+    if (test_car_phase > 2.0f * (float)M_PI) test_car_phase -= 2.0f * (float)M_PI;
+    if (test_mod_phase > 2.0f * (float)M_PI) test_mod_phase -= 2.0f * (float)M_PI;
+    iqPairCount++;
+#else
   while (iq_adc_ready() && iq_adc_available() > 0) {
     IqSample sample = iq_adc_read_iq();
     iqPairCount++;
+#endif
 
     // Waterfall capture at 32kHz IQ (128-point FFT -> 128 bins across 32kHz)
     // Throttle updates to reduce CPU load.
@@ -147,18 +165,26 @@ static void processAudioTest() {
     // Apply CIC decimating filter (decimation by 4: 32kHz → 8kHz)
     if (cic.processSample(sample.i, sample.q)) {
       // CIC filter has produced decimated output at 8kHz
-      // Scale down: CIC has gain, >>3 (divide by 8) for decimation by 4
-      int16_t iDecimated = cic.getOutputI() >> 3;
-      int16_t qDecimated = cic.getOutputQ() >> 3;
+      // Scale down: CIC gain is R^N = 4^3 = 64
+      int16_t iDecimated = (int16_t)(cic.getOutputI() >> 6);
+      int16_t qDecimated = (int16_t)(cic.getOutputQ() >> 6);
+
+      // Get current mode from UI early (needed for AM DC handling)
+      UiMode uiMode = ui_get_mode();
+      DemodMode demodMode = ui_mode_to_demod_mode(uiMode);
 
       // DC removal (high-pass filter)
       // Uses slow-moving average to track DC component
-      i_dc += (((int32_t)iDecimated << 8) - i_dc) >> 8;  // Time constant ~256 samples
-      q_dc += (((int32_t)qDecimated << 8) - q_dc) >> 8;
-      
-      // Remove DC offset
-      int16_t iClean = iDecimated - (i_dc >> 8);
-      int16_t qClean = qDecimated - (q_dc >> 8);
+      int16_t iClean = iDecimated;
+      int16_t qClean = qDecimated;
+      if (demodMode != DEMOD_AM) {
+        i_dc += (((int32_t)iDecimated << 8) - i_dc) >> 8;  // Time constant ~256 samples
+        q_dc += (((int32_t)qDecimated << 8) - q_dc) >> 8;
+        
+        // Remove DC offset
+        iClean = iDecimated - (i_dc >> 8);
+        qClean = qDecimated - (q_dc >> 8);
+      }
 
       // Fractional-sample timing skew correction (IQ Delay)
       // Positive delay => delay Q by d samples; Negative delay => delay I by |d| samples
@@ -166,6 +192,7 @@ static void processAudioTest() {
       static int16_t prevQ = 0;
       const int16_t rawI = iClean;
       const int16_t rawQ = qClean;
+#if !AM_TEST_MODE
       const float d = ui_get_iq_delay(); // -0.50 .. +0.50
       if (d > 0.0f) {
         qClean = (int16_t)((1.0f - d) * rawQ + d * prevQ);
@@ -173,6 +200,7 @@ static void processAudioTest() {
         const float ad = -d;
         iClean = (int16_t)((1.0f - ad) * rawI + ad * prevI);
       }
+#endif
       prevI = rawI;
       prevQ = rawQ;
 
@@ -232,6 +260,7 @@ static void processAudioTest() {
       // Phase correction: rotate I/Q by (iq_phase - 90) degrees
       // I' = I*cos(θ) - Q*sin(θ), Q' = I*sin(θ) + Q*cos(θ)
       int16_t phase_deg = ui_get_iq_phase();
+    #if !AM_TEST_MODE
       float phase_error_rad = (90 - phase_deg) * 0.0174533f; // Convert to radians (invert correction direction)
       float cos_theta = cosf(phase_error_rad);
       float sin_theta = sinf(phase_error_rad);
@@ -240,6 +269,7 @@ static void processAudioTest() {
       int16_t qPhased = (int16_t)(iClean * sin_theta + qClean * cos_theta);
       iClean = iPhased;
       qClean = qPhased;
+    #endif
       
     #if IQ_MEASURE_LOG
       // Measure after phase correction, before amplitude balance
@@ -256,7 +286,9 @@ static void processAudioTest() {
       
       // THEN apply amplitude balance
       float iq_balance = ui_get_iq_balance();
+    #if !AM_TEST_MODE
       qClean = (int16_t)(qClean * iq_balance);
+    #endif
       
 #if IQ_MEASURE_LOG
       if(measure_count >= 8000) {  // Every second at 8kHz
@@ -285,40 +317,128 @@ static void processAudioTest() {
       }
 #endif
 
-      // Get current mode from UI
-      UiMode uiMode = ui_get_mode();
-      DemodMode demodMode = ui_mode_to_demod_mode(uiMode);
-      
       // Apply Hilbert transform and demodulation
       // Note: demod_process handles the sign conventions internally
-      int16_t audioSample = demod_process(iClean, qClean, demodMode);
+      int16_t demodSample = demod_process(iClean, qClean, demodMode);
+    #if AM_TEST_MODE
+      // Verify demod output: measure 1 kHz vs 2 kHz content (pre-processing)
+      static float v_cos1 = 1.0f, v_sin1 = 0.0f;
+      static float v_cos2 = 1.0f, v_sin2 = 0.0f;
+      static const float v_cos1_step = 0.70710678f; // cos(2*pi*1000/8000)
+      static const float v_sin1_step = 0.70710678f; // sin(2*pi*1000/8000)
+      static const float v_cos2_step = 0.0f;        // cos(2*pi*2000/8000)
+      static const float v_sin2_step = 1.0f;        // sin(2*pi*2000/8000)
+      static double v_re1 = 0.0, v_im1 = 0.0;
+      static double v_re2 = 0.0, v_im2 = 0.0;
+      static uint32_t v_count = 0;
 
-      // Simple AM-only AGC to reduce overload distortion
-      if (demodMode == DEMOD_AM && ui_get_agc()) {
-        static float agc_env = 0.0f;
-        static float agc_gain = 1.0f;
-        const float x = fabsf((float)audioSample);
-        const float attack = 0.35f;
-        const float decay = 0.01f;
-        if (x > agc_env) agc_env += (x - agc_env) * attack;
-        else agc_env += (x - agc_env) * decay;
+      v_re1 += (double)demodSample * v_cos1;
+      v_im1 += (double)demodSample * v_sin1;
+      v_re2 += (double)demodSample * v_cos2;
+      v_im2 += (double)demodSample * v_sin2;
+      v_count++;
 
-        const float target = 4000.0f;
-        float g = target / (agc_env + 1.0f);
-        if (g > 5.0f) g = 5.0f;
-        if (g < 0.05f) g = 0.05f;
-        agc_gain += (g - agc_gain) * 0.05f;
-        audioSample = (int16_t)(audioSample * agc_gain);
+      float next_cos1 = v_cos1 * v_cos1_step - v_sin1 * v_sin1_step;
+      float next_sin1 = v_sin1 * v_cos1_step + v_cos1 * v_sin1_step;
+      v_cos1 = next_cos1;
+      v_sin1 = next_sin1;
+
+      float next_cos2 = v_cos2 * v_cos2_step - v_sin2 * v_sin2_step;
+      float next_sin2 = v_sin2 * v_cos2_step + v_cos2 * v_sin2_step;
+      v_cos2 = next_cos2;
+      v_sin2 = next_sin2;
+
+      if (v_count >= 8000) {
+        const double p1 = v_re1 * v_re1 + v_im1 * v_im1;
+        const double p2 = v_re2 * v_re2 + v_im2 * v_im2;
+        const double ratio = (p2 + 1e-12) / (p1 + 1e-12);
+        const double ratio_db = 10.0 * log10(ratio);
+        Serial.printf("[AM Test] 1k=%.3e 2k=%.3e 2k/1k=%.2f dB\n", p1, p2, ratio_db);
+        v_re1 = v_im1 = v_re2 = v_im2 = 0.0;
+        v_count = 0;
       }
+    #endif
+      int16_t audioSample = demodSample;
 
       // Apply UI-selected audio filter (SSB/AM/FM shared; CW narrow filters when selected)
+    #if AM_TEST_MODE
+      int8_t filt = 0;
+      int8_t cw_tone = 0;
+      int8_t volume = 5;
+    #else
       int8_t filt = ui_get_filter();
       int8_t cw_tone = ui_get_cw_tone();
       int8_t volume = ui_get_volume();
-      audioSample = audio_filter_apply(audioSample, filt, cw_tone, volume);
+    #endif
+      audioSample = audio_filter_apply(audioSample, filt, cw_tone);
+
+      // Simple AGC after filtering/volume to reduce overload distortion
+      if (ENABLE_AGC && ui_get_agc()) {
+        const bool isSSB = (demodMode == DEMOD_LSB || demodMode == DEMOD_USB);
+        const bool isAM = (demodMode == DEMOD_AM);
+        if (isSSB) {
+          static float agc_env_ssb = 0.0f;
+          static float agc_gain_ssb = 1.0f;
+
+          float &agc_env = agc_env_ssb;
+          float &agc_gain = agc_gain_ssb;
+
+          const float x = fabsf((float)audioSample);
+          const float attack = 0.02f;
+          const float decay = 0.002f;
+          if (x > agc_env) agc_env += (x - agc_env) * attack;
+          else agc_env += (x - agc_env) * decay;
+
+          const float target = 6000.0f;
+          float g = target / (agc_env + 1.0f);
+          // SSB AGC with moderate boost
+          if (g > 2.5f) g = 2.5f;
+          if (g < 0.1f) g = 0.1f;
+          agc_gain += (g - agc_gain) * 0.01f;
+          audioSample = (int16_t)(audioSample * agc_gain);
+        } else if (isAM) {
+          static float agc_env_am = 0.0f;
+          static float agc_gain_am = 1.0f;
+
+          float &agc_env = agc_env_am;
+          float &agc_gain = agc_gain_am;
+
+          const float x = fabsf((float)audioSample);
+          const float attack = AM_AGC_ATTACK;
+          const float decay = AM_AGC_DECAY;
+          if (x > agc_env) agc_env += (x - agc_env) * attack;
+          else agc_env += (x - agc_env) * decay;
+
+          const float target = AM_AGC_TARGET;
+          float g = target / (agc_env + 1.0f);
+          if (g > AM_AGC_MAX_GAIN) g = AM_AGC_MAX_GAIN;
+          if (g < AM_AGC_MIN_GAIN) g = AM_AGC_MIN_GAIN;
+          agc_gain += (g - agc_gain) * 0.02f;
+          audioSample = (int16_t)(audioSample * agc_gain);
+        }
+      }
+
+      // Send to websocket audio stream before volume scaling
+      wifi_config_audio_push(lastSynth.vfoHz, 4 * audioSample); // amplify 4x also
+
+      // Apply volume after AGC to prevent pre-AGC overflow (volume 0-10, 2 = unity)
+      int32_t volScaled = ((int32_t)audioSample * (int32_t)volume) / 2;
+      if (volScaled > 32767) volScaled = 32767;
+      if (volScaled < -32768) volScaled = -32768;
+      audioSample = (int16_t)volScaled;
+
+#if !AM_TEST_MODE
+      // Soft limiter to avoid hard clipping distortion
+      const int16_t limit = 29000;
+      if (audioSample > limit) {
+        audioSample = limit + (audioSample - limit) / 4;
+      } else if (audioSample < -limit) {
+        audioSample = -limit + (audioSample + limit) / 4;
+      }
       
       // Scale to reasonable audio level
-      audioSample = audioSample >> 1;  // Divide by 2
+      // audioSample = audioSample >> 1;  // Divide by 2
+#endif
       
       // Clip to prevent overflow
       if (audioSample > 32767) audioSample = 32767;
@@ -328,8 +448,13 @@ static void processAudioTest() {
       if (audio_i2s_write_sample(audioSample)) {
         audioSampleCount++;
       }
+      
     }
+#if AM_TEST_MODE
   }
+#else
+  }
+#endif
 }
 
 void setup() {
@@ -366,6 +491,9 @@ void setup() {
 
   // Load persisted UI settings before programming the synth
   ui_load_settings();
+
+  // Start WiFi config (STA if credentials are valid, AP fallback if not)
+  wifi_config_setup();
 
   Serial.printf("Apply initial SI5351 programming based on UI state at startup.\r\n");
   const UiMode uiModeNow = ui_get_mode();
@@ -416,7 +544,7 @@ void setup() {
 void loop() {
   ui_loop();
 
-
+  wifi_config_loop();
 
   // Process audio (simple test: decimation + pass-through)
   processAudioTest();
@@ -439,8 +567,9 @@ void loop() {
   // Including F_XTAL in synthStateChanged to handle crystal frequency changes
   if (synthStateChanged(now, lastSynth)) {
     si5351.fxtal = now.fxtalHz;
-    const int32_t programmedHz = programSi5351Rx(si5351, now);
+    programSi5351Rx(si5351, now);
     lastSynth = now;
+    
   }
 
   // Keep ADC attenuation in sync with UI ATT (main.ori-style sensitivity control).
