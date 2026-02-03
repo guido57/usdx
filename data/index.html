@@ -1,0 +1,133 @@
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="UTF-8">
+
+<title>uSDX Main</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div class='top'>
+  <div class='brand'>uSDX</div>
+  <div class='nav' id="mainTabs">
+    <a href="#" class="tab-link active" data-tab="wifi">WiFi Config</a>
+    <a href="#" class="tab-link" data-tab="ui">UI Settings</a>
+    <a href="#" class="tab-link" data-tab="audio">Audio Monitor</a>
+    <a href="#" class="tab-link" data-tab="ft8">FT8 Control</a>
+  </div>
+</div>
+
+<div class='container'>
+  <!-- WiFi Config -->
+  <div class='section tab-section' id='wifi'>
+    <h3>WiFi Configuration</h3>
+    <form id="wifiForm">
+      <div class='row'>
+        <label>SSID:</label>
+        <div class='ctrl'><input type='text' name='ssid'></div>
+      </div>
+      <div class='row'>
+        <label>Password:</label>
+        <div class='ctrl'><input type='password' name='pass'></div>
+      </div>
+      <div class='actions'>
+        <button class='btn' type='submit'>Save WiFi</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- UI Settings -->
+  <div class='section tab-section' id='ui'>
+    <h3>uSDX UI Settings</h3>
+    <form id="uiForm">
+      <div id="uiControls"></div>
+      <div class='actions'>
+        <button class='btn' type='submit'>Apply</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Audio Monitor -->
+  <div class='section tab-section' id='audio'>
+    <h3>Audio Monitor</h3>
+    <div class='muted'>Stream 8 kHz PCM audio to this browser.</div>
+    <div class='actions'>
+      <button class='btn' type='button' id='audioStart'>Start Audio</button>
+      <button class='btn secondary' type='button' id='audioStop'>Stop Audio</button>
+      <span id='audioStatus' class='badge'>Stopped</span>
+    </div>
+  </div>
+
+  <!-- FT8 Control -->
+  <div class='section tab-section' id='ft8'>
+    <h3>FT8 Control</h3>
+
+    <div class='row'>
+        <label>Frequency (Hz):</label>
+        <div class='ctrl'><input type='number' id='ft8-frequency' value='7074000'></div>
+    </div>
+
+    <div class='actions'>
+        <button class='btn' id='ft8-start'>Start FT8</button>
+        <button class='btn secondary' id='ft8-stop'>Stop FT8</button>
+        <button class='btn' id='ft8-send-test'>Send Test</button>
+        <span id='ft8-status' class='badge'>Idle</span>
+    </div>
+
+    <div style="display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap;">
+
+    <!-- LEFT: SPOTS -->
+    <div style="flex:1; min-width:420px;">
+        <h4>Decoded Spots</h4>
+        <table id='ft8-spots'>
+        <thead>
+            <tr>
+            <th>Time</th><th>Call</th><th>Grid</th>
+            <th>To-call</th><th>To-grid</th>
+            <th>Freq</th><th>Report</th><th>Action</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+        </table>
+    </div>
+
+    <!-- RIGHT: QSOs -->
+    <div style="flex:1; min-width:420px;">
+        <h4 id="activeRecentQSOs">Active / Recent QSOs</h4>
+        <table id="ft8-qsos">
+        <thead>
+            <tr>
+            <th>Start</th>
+            <th>Last</th>
+            <th>Call 1</th>
+            <th>Grid 1</th>
+            <th>SNR 1</th>
+            <th>Call 2</th>
+            <th>Grid 2</th>
+            <th>SNR 2</th>
+            <th>Rpt 1</th>
+            <th>Rpt 2</th>
+            <th>Duration</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+        </table>
+    </div>
+
+    </div>
+
+    <h4>Current QSO</h4>
+    <div id='ft8-qso' class='muted'>No active QSO</div>
+    <div class='actions'>
+    <button class='btn' id='ft8-answer-cq'>Answer CQ</button>
+    <button class='btn secondary' id='ft8-clear-qso'>Clear QSO</button>
+    </div>
+
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

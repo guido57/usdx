@@ -1,7 +1,7 @@
 // audio_i2s.cpp - I2S audio output using legacy ESP-IDF I2S driver (PSRAM compatible)
+#include <Arduino.h>
 #include "audio_i2s.h"
 #include "configuration.h"
-#include <Arduino.h>
 #include <driver/i2s.h>
 #include <esp_heap_caps.h>
 
@@ -28,7 +28,7 @@ bool audio_i2s_setup()
         .dma_buf_len = 64,
         .use_apll = false,
         .tx_desc_auto_clear = true,
-        .fixed_mclk = 0
+        .fixed_mclk = 0,
     };
     
     i2s_pin_config_t pin_config = {
