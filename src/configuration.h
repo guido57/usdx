@@ -22,16 +22,20 @@
 #define SI5351_ADDR 0x60
 #endif
 
+#define CLK2
+
 // Set to 1 to print SI5351 programming details over Serial.
 #ifndef SYNTH_DEBUG
 #define SYNTH_DEBUG 0
 #endif
 
-
-// Default test wiring for ESP32-S3 DevKitC: use GPIO1/GPIO2 (ADC-capable and typically exposed).
+// Default test wiring for ESP32-S3 DevKitC: use GPIO5/GPIO5 (ADC-capable and typically exposed).
 // Some modules/board variants reserve GPIO9/10 for flash signals; IDF may reject them.
 #define GPIO_ADC_I 6
 #define GPIO_ADC_Q 7
+
+#define GPIO_PWM_RX_ATT  5  // PWM output for ATT control
+#define GPIO_PWM_TX_BIAS 4  // PWM output for biasing power amplifier
 
 // IQ ADC sampling configuration (ESP32)
 // main.ori uses a 62.5kHz timer ISR and alternates I/Q each tick, i.e. ~31.25kS/s per channel.

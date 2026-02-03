@@ -8,7 +8,8 @@
 #include "configuration.h"
 #include "display.h"
 #include "encoder.h"
-#include "phy/si5351.h"
+#include "si5351.h"
+#include "wifi_config.h"
 
 // --- Core UI state (trimmed from main.ori but behaviorally similar) ---
 enum Mode { LSB = 0, USB, CW, AM, N_MODES };
@@ -38,6 +39,7 @@ static int8_t filt = 0;
 static int8_t agc = 1;
 static int8_t nr = 0;
 static int8_t att = 0;
+static int8_t att_rf = 0;
 static int8_t smode = 1;
 static int8_t cw_tone = 2;
 static int16_t cw_offset = 700;
@@ -87,6 +89,7 @@ float ui_get_iq_balance() { return iq_balance / 100.0f; }
 float ui_get_iq_delay() { return iq_delay / 100.0f; }
 int32_t ui_get_sifxtal() { return sifxtal; }
 int8_t ui_get_att() { return att; }
+int8_t ui_get_att_rf() { return att_rf; }
 int8_t ui_get_agc() { return agc; }
 int8_t ui_get_wf_thresh() { return wf_thresh; }
 
@@ -158,6 +161,7 @@ static void loadSettings() {
   agc = constrain(s.agc, (int8_t)0, (int8_t)1);
   nr = constrain(s.nr, (int8_t)0, (int8_t)1);
   att = constrain(s.att, (int8_t)0, (int8_t)2);
+  att_rf = constrain(s.att_rf, (int8_t)0, (int8_t)30);
   smode = constrain(s.smode, (int8_t)0, (int8_t)6);
   cw_tone = constrain(s.cw_tone, (int8_t)0, (int8_t)5);
   cw_offset = constrain(s.cw_offset, (int16_t)300, (int16_t)1200);
@@ -199,6 +203,7 @@ bool ui_get_settings(UiSettings* out) {
   out->agc = agc;
   out->nr = nr;
   out->att = att;
+  out->att_rf = att_rf;
   out->smode = smode;
   out->cw_tone = cw_tone;
   out->cw_offset = cw_offset;
@@ -229,6 +234,7 @@ void ui_apply_settings(const UiSettings& s) {
   agc = constrain(s.agc, (int8_t)0, (int8_t)1);
   nr = constrain(s.nr, (int8_t)0, (int8_t)1);
   att = constrain(s.att, (int8_t)0, (int8_t)2);
+  att_rf = constrain(s.att_rf, (int8_t)0, (int8_t)30);
   smode = constrain(s.smode, (int8_t)0, (int8_t)6);
   cw_tone = constrain(s.cw_tone, (int8_t)0, (int8_t)5);
   cw_offset = constrain(s.cw_offset, (int16_t)300, (int16_t)1200);
@@ -273,6 +279,7 @@ static void saveSettings() {
   s.agc = agc;
   s.nr = nr;
   s.att = att;
+  s.att_rf = att_rf;
   s.smode = smode;
   s.cw_tone = cw_tone;
   s.cw_offset = cw_offset;
@@ -351,6 +358,7 @@ static int32_t param_filter = filt;
 static int32_t param_agc = agc;
 static int32_t param_nr = nr;
 static int32_t param_att = att;
+static int32_t param_att_rf = att_rf;
 static int32_t param_smode = smode;
 static int32_t param_cw_tone = cw_tone;
 static int32_t param_cw_offset = cw_offset;
@@ -385,6 +393,7 @@ static Param params[] = {
   { "AGC",       &param_agc,       0, 1, true,            P_BOOL, kOnOffLabel, 2 },
   { "NR",        &param_nr,        0, 1, true,            P_BOOL, kOnOffLabel, 2 },
   { "ATT",       &param_att,       0, 2, true,            P_INT,  nullptr, 0 },
+  { "ATT RF",    &param_att_rf,    0, 30, true,            P_INT,  nullptr, 0 },
   { "S-Meter",   &param_smode,     0, 6, true,            P_ENUM, kSmodeLabel, (uint8_t)(sizeof(kSmodeLabel) / sizeof(kSmodeLabel[0])) },
 
   { "CW Tone",   &param_cw_tone,   0, 5, true,            P_INT,  nullptr, 0 },
@@ -440,6 +449,7 @@ static void syncParamsToState() {
   param_agc = agc;
   param_nr = nr;
   param_att = att;
+  param_att_rf = att_rf;
   param_smode = smode;
   param_cw_tone = cw_tone;
   param_cw_offset = cw_offset;
@@ -471,6 +481,7 @@ static void applyParamToState() {
   agc = static_cast<int8_t>(constrain(param_agc, 0, 1));
   nr = static_cast<int8_t>(constrain(param_nr, 0, 1));
   att = static_cast<int8_t>(constrain(param_att, 0, 2));
+  att_rf = static_cast<int8_t>(constrain(param_att_rf, 0, 30));
   smode = static_cast<int8_t>(constrain(param_smode, 0, 6));
   cw_tone = static_cast<int8_t>(constrain(param_cw_tone, 0, 5));
   cw_offset = static_cast<int16_t>(constrain(param_cw_offset, 300, 1200));
@@ -540,6 +551,35 @@ static void show_banner() {
   if (ritActive) lcd.raw().print(F(" RIT"));
 }
 
+void drawWifiIcon(int x, int y, uint8_t bars)
+{
+    for (int i = 0; i < 4; i++) {
+        int h = (i + 1) * 3;
+        if (i < bars)
+            lcd.raw().fillRect(x + i*4, y - h, 3, h, WHITE);
+        else
+            lcd.raw().drawRect(x + i*4, y - h, 3, h, WHITE);
+    }
+}
+
+enum Ft8IconState {
+    FT8_OFF,
+    FT8_IDLE,
+    FT8_ACTIVE
+};
+
+void drawFt8Icon(int x, int y, Ft8IconState state)
+{
+    lcd.raw().drawRect(x, y, 8, 8, WHITE);  // border
+
+    if (state == FT8_IDLE) {
+        lcd.raw().drawPixel(x+3, y+3, WHITE);   // small dot
+    }
+    else if (state == FT8_ACTIVE) {
+        lcd.raw().fillRect(x+1, y+1, 6, 6, WHITE); // filled
+    }
+}
+
 static void renderHome() {
   show_banner();
 
@@ -558,6 +598,19 @@ static void renderHome() {
   lcd.setCursor(0, 40);
   lcd.raw().print(F("Vol  "));
   lcd.raw().print(volume);
+
+  drawWifiIcon(110, 16, g_wifiBars);
+
+  Ft8IconState s;
+
+  if (!g_ft8ServerConnected)
+      s = FT8_OFF;
+  if (g_ft8ServerActive && ((millis()/400) % 2))
+      s = FT8_ACTIVE;
+  else
+      s = FT8_IDLE;
+
+  drawFt8Icon(105, 0, s);   // top-right corner
 
   // Waterfall area (bottom 16 pixels)
   lcd.raw().fillRect(0, 48, 128, 16, SSD1306_BLACK);

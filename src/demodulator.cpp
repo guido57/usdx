@@ -37,7 +37,7 @@ static inline int32_t magn32(int16_t i, int16_t q) {
 }
 
 int16_t demod_process(int16_t i_sample, int16_t q_sample, DemodMode mode) {
-  int16_t ac;
+  int16_t ac = 0;
   
   // Apply Hilbert transform on Q channel
   // Hilbert transform, 43dB side-band rejection in 650..3400Hz (@8kSPS)

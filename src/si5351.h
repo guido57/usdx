@@ -4,7 +4,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-
+#include "configuration.h"
 // UI-agnostic RX synth programming helpers.
 // Mode mapping is intentionally numeric to avoid coupling this low-level driver
 // header to the UI layer.
@@ -88,7 +88,6 @@ public:
     _i2c_error = Wire.endTransmission();
     delay(0);
   }
-  
   void SendRegister(uint8_t reg, uint8_t* data, uint8_t n){
     if (_i2c_error) return;
     Wire.beginTransmission(SI5351_ADDR);
@@ -102,6 +101,8 @@ public:
 ///*
   enum ms_t { PLLA=0, PLLB=1, MSNA=-2, MSNB=-1, MS0=0, MS1=1, MS2=2, MS3=3, MS4=4, MS5=5 };
   
+  // set MSx to div_nom/div_denom, integer mode if _int!=0, phase in degrees, rdiv=0..7 (division by 2^rdiv)
+  // 
   void ms(int8_t n, uint32_t div_nom, uint32_t div_denom, uint8_t pll = PLLA, uint8_t _int = 0, uint16_t phase = 0, uint8_t rdiv = 0){
     if (_i2c_error) return;
     uint16_t msa; uint32_t msb, msc, msp1, msp2, msp3;
@@ -154,7 +155,7 @@ public:
       
       // Debug: print phase programming info
       uint16_t msa = fvcoa / fout;
-      Serial.printf("[SI5351] fout=%ld Hz, d=%d, fvcoa=%ld Hz, msa=%d, i_phase=%d deg, q_phase=%d deg, i_reg=%d, q_reg=%d\n", 
+      Serial.printf("[SI5351] fout=%d Hz, d=%d, fvcoa=%d Hz, msa=%d, i_phase=%d deg, q_phase=%d deg, i_reg=%d, q_reg=%d\n", 
                     fout, d, fvcoa, msa, i, q, i*msa/90, q*msa/90);
       
 #ifdef F_CLK2
@@ -186,7 +187,7 @@ public:
     Wire.beginTransmission(SI5351_ADDR);
     Wire.write(reg);
     Wire.endTransmission();
-    Wire.requestFrom(SI5351_ADDR, (uint8_t)1);
+    Wire.requestFrom(SI5351_ADDR, 1);
     uint8_t data = Wire.read();
     return data;
   }

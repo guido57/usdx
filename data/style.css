@@ -1,0 +1,98 @@
+body {
+  font-family: Arial, sans-serif;
+  margin: 0;
+  background: #f7f7f7;
+  color: #222;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  background: #333;
+  color: white;
+  padding: 0 10px;
+}
+
+.brand {
+  font-weight: bold;
+  padding: 10px;
+}
+
+.nav {
+  display: flex;
+  flex: 1;
+}
+
+.nav a {
+  color: white;
+  text-decoration: none;
+  padding: 10px 15px;
+  display: inline-block;
+  cursor: pointer;
+}
+
+.nav a.active {
+  background: #555;
+  border-radius: 4px;
+}
+
+.container {
+  padding: 15px;
+}
+
+.section {
+  background: white;
+  padding: 15px;
+  margin-bottom: 15px;
+  border-radius: 6px;
+  display: none;
+}
+
+.section.active {
+  display: block;
+}
+
+.row {
+  display: flex;
+  margin-bottom: 10px;
+  align-items: center;
+}
+
+.row label {
+  flex: 0 0 120px;
+}
+
+.ctrl input {
+  flex: 1;
+  padding: 5px;
+}
+
+.actions {
+  margin-top: 10px;
+}
+
+.btn {
+  background: #333;
+  color: white;
+  border: none;
+  padding: 7px 15px;
+  margin-right: 5px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.btn.secondary {
+  background: #666;
+}
+
+.badge {
+  padding: 5px 10px;
+  background: #ccc;
+  border-radius: 4px;
+  margin-left: 10px;
+}
+
+.muted {
+  color: #777;
+  margin-bottom: 5px;
+}

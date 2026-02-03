@@ -1,441 +1,221 @@
 #include "iq_adc.h"
-
 #include <Arduino.h>
+#include <string.h>
+#include "driver/adc.h"
 
-#include "configuration.h"
-
-#if defined(ARDUINO_ARCH_ESP32)
-  #include <esp_err.h>
-  #include <esp_adc/adc_continuous.h>
-  #include <esp_adc/adc_oneshot.h>  // used for gpio->(unit,channel) mapping
-  #include <soc/soc_caps.h>
-
-  #include <freertos/FreeRTOS.h>
-  #include <freertos/task.h>
-#else
-  #error "iq_adc.cpp requires ESP32 (ARDUINO_ARCH_ESP32)"
+// --- Configuration ---
+// These are likely in your configuration.h, but defined here for safety
+#ifndef IQ_ADC_DC_SHIFT
+  #define IQ_ADC_DC_SHIFT 8 // Controls how slow the filter is
 #endif
 
-// Arduino-ESP32 provides these ADC attenuation constants and helpers.
-// Arduino.h pulls in the necessary headers.
+#define RING_BUF_SIZE 1024
+#define ADC1_CHAN_I ADC1_CHANNEL_5 // GPIO 6
+#define ADC1_CHAN_Q ADC1_CHANNEL_6 // GPIO 7
 
-static uint8_t currentAttLevel = 255;
-static int16_t prevIRaw = 0;
-static bool adcReady = false;
-static bool pinsConfigured = false;
-
-// DC estimates stored in fixed-point to avoid "stuck" behavior for small offsets.
-static int32_t dcI = 0;  // Q8 (i.e. value << 8)
-static int32_t dcQ = 0;  // Q8 (i.e. value << 8)
-
-static inline int16_t center12bit(int raw);
-
-static inline int16_t dcDecouple(int16_t x, int32_t* dc) {
-  // Same concept as main.ori "DC decoupling": keep a running average and subtract it.
-  // Use a slow average so we remove bias (e.g. 1.65V) without affecting audio-band test tones.
-  // Keep dc in Q8 so even small deltas update the estimate.
-  const int32_t xi = (int32_t)x;
-  const int32_t xq = xi << 8;
-  *dc += (xq - *dc) >> (int)IQ_ADC_DC_SHIFT;
-  const int32_t dcInt = (*dc) >> 8;
-  int32_t y = xi - dcInt;
-  if (y > INT16_MAX) y = INT16_MAX;
-  if (y < INT16_MIN) y = INT16_MIN;
-  return (int16_t)y;
-}
-
-static volatile uint32_t droppedPairs = 0;
-static volatile uint32_t adcTotalReads = 0;
-static volatile uint32_t adcZeroLenReads = 0;
-static volatile uint32_t adcTotalSamples = 0;
-static volatile uint32_t adcUnitMismatch = 0;
-static volatile uint32_t adcPushedPairs = 0;
-
-// Lock-free-ish ring buffer for I/Q pairs (single producer, single consumer).
-static IqSample iqRing[IQ_ADC_RING_SIZE];
+// --- Global State ---
+static IqSample ringBuffer[RING_BUF_SIZE];
 static volatile uint32_t ringWrite = 0;
 static volatile uint32_t ringRead = 0;
-
-static inline uint32_t ringCount() {
-  return (uint32_t)(ringWrite - ringRead);
-}
-
-static inline void ringPush(const IqSample& s) {
-  // If full, drop the oldest item (keeps stream "most recent" and preserves phase continuity).
-  if (ringCount() >= (uint32_t)IQ_ADC_RING_SIZE) {
-    ringRead++;
-    droppedPairs++;
-  }
-  iqRing[ringWrite % (uint32_t)IQ_ADC_RING_SIZE] = s;
-  ringWrite++;
-}
-
-static inline bool ringPop(IqSample* out) {
-  if (ringCount() == 0) return false;
-  *out = iqRing[ringRead % (uint32_t)IQ_ADC_RING_SIZE];
-  ringRead++;
-  return true;
-}
-
-static adc_continuous_handle_t adcHandle = nullptr;
-static adc_unit_t adcUnit = ADC_UNIT_1;
-static adc_channel_t adcChanI;
-static adc_channel_t adcChanQ;
-static bool idfConfigured = false;
-
-static adc_digi_pattern_config_t adcPattern[2];
-static adc_continuous_config_t adcCfg;
+static uint32_t droppedPairs = 0;
 
 static TaskHandle_t adcTask = nullptr;
-static volatile uint32_t poolOvfCount = 0;
-static volatile uint32_t adcReadErrors = 0;
+static bool adcReady = false;
 
-static bool IRAM_ATTR onPoolOvf(adc_continuous_handle_t, const adc_continuous_evt_data_t*, void*) {
-  poolOvfCount++;
-  return false;
-}
+// DC estimates stored in Q8 fixed-point (value << 8)
+static int32_t dcI = 0;  
+static int32_t dcQ = 0;  
 
-static inline adc_atten_t toIdfAtten(uint8_t level) {
-  switch (level) {
-    case 0: return ADC_ATTEN_DB_0;
-    case 1: return ADC_ATTEN_DB_6;
-    default: return ADC_ATTEN_DB_12;
-  }
-}
+// DMA Buffer - S3 requires Internal SRAM
+static DMA_ATTR uint8_t rawBuf[2048];
 
-static bool idfStop() {
-  if (!adcHandle) return true;
-  const esp_err_t err = adc_continuous_stop(adcHandle);
-  return (err == ESP_OK) || (err == ESP_ERR_INVALID_STATE);
-}
+// --- The Fixed-Point Decoupler ---
 
-static bool idfStart(adc_atten_t atten) {
-  if (!adcHandle) return false;
-  // Pattern order matters: main.ori alternates conversions I, Q, I, Q ...
-  adcPattern[0].atten = (uint8_t)atten;
-  adcPattern[1].atten = (uint8_t)atten;
-
-  esp_err_t err = adc_continuous_config(adcHandle, &adcCfg);
-  if (err != ESP_OK) {
-    Serial.printf("[IQ] adc_continuous_config failed: %d\n", (int)err);
-    return false;
-  }
-
-  (void)adc_continuous_flush_pool(adcHandle);
-  
-  err = adc_continuous_start(adcHandle);
-  if (err != ESP_OK) {
-    Serial.printf("[IQ] adc_continuous_start failed: %d\n", (int)err);
-    return false;
-  }
-
-  return true;
-}
-
-static bool idfInit() {
-  adc_unit_t unitI;
-  adc_unit_t unitQ;
-  adc_channel_t chanI;
-  adc_channel_t chanQ;
-
-  esp_err_t err = adc_oneshot_io_to_channel((gpio_num_t)GPIO_ADC_I, &unitI, &chanI);
-  if (err != ESP_OK) {
-    Serial.printf("[IQ] GPIO%d is not ADC-capable (err=%d)\n", GPIO_ADC_I, (int)err);
-    return false;
-  }
-  err = adc_oneshot_io_to_channel((gpio_num_t)GPIO_ADC_Q, &unitQ, &chanQ);
-  if (err != ESP_OK) {
-    Serial.printf("[IQ] GPIO%d is not ADC-capable (err=%d)\n", GPIO_ADC_Q, (int)err);
-    return false;
-  }
-  if (unitI != unitQ) {
-    Serial.printf("[IQ] I and Q are on different ADC units (I=u%d, Q=u%d). Not supported.\n", (int)unitI, (int)unitQ);
-    return false;
-  }
-
-  adcUnit = unitI;
-  adcChanI = chanI;
-  adcChanQ = chanQ;
-
-  const uint32_t maxStore = IQ_ADC_DMA_MAX_STORE_BYTES;
-  const uint32_t frameSize = IQ_ADC_DMA_FRAME_BYTES;  // must be a multiple of SOC_ADC_DIGI_DATA_BYTES_PER_CONV (4 on ESP32-S3)
-
-  adc_continuous_handle_cfg_t hcfg = {};
-  hcfg.max_store_buf_size = maxStore;
-  hcfg.conv_frame_size = frameSize;
-  hcfg.flags.flush_pool = 1;
-
-  err = adc_continuous_new_handle(&hcfg, &adcHandle);
-  if (err != ESP_OK) {
-    Serial.printf("[IQ] adc_continuous_new_handle failed: %d\n", (int)err);
-    adcHandle = nullptr;
-    return false;
-  }
-
-  // Configure conversion pattern: I then Q.
-  adcPattern[0].atten = (uint8_t)ADC_ATTEN_DB_0;
-  adcPattern[0].channel = (uint8_t)adcChanI;
-  adcPattern[0].unit = (uint8_t)adcUnit;
-  adcPattern[0].bit_width = (uint8_t)ADC_BITWIDTH_12;
-
-  adcPattern[1].atten = (uint8_t)ADC_ATTEN_DB_0;
-  adcPattern[1].channel = (uint8_t)adcChanQ;
-  adcPattern[1].unit = (uint8_t)adcUnit;
-  adcPattern[1].bit_width = (uint8_t)ADC_BITWIDTH_12;
-
-  adcCfg.pattern_num = 2;
-  adcCfg.adc_pattern = adcPattern;
-  adcCfg.sample_freq_hz = IQ_ADC_CONV_RATE_HZ;
-  adcCfg.conv_mode = (adcUnit == ADC_UNIT_1) ? ADC_CONV_SINGLE_UNIT_1 : ADC_CONV_SINGLE_UNIT_2;
-  adcCfg.format = ADC_DIGI_OUTPUT_FORMAT_TYPE2;
-
-  // Register overflow callback (helps detect "lost samples" due to internal pool full).
-  adc_continuous_evt_cbs_t cbs = {};
-  cbs.on_pool_ovf = onPoolOvf;
-  (void)adc_continuous_register_event_callbacks(adcHandle, &cbs, nullptr);
-
-  return true;
-}
-
-static void adcReaderTask(void*) {
-  // main.ori logic: conversions alternate I/Q and I is interpolated to compensate skew.
-  bool havePendingI = false;
-  int16_t pendingICorr = 0;
-
-  // Use a large local buffer to drain DMA efficiently.
-  static uint8_t rawBuf[IQ_ADC_DMA_FRAME_BYTES];
-
-  // ADC noise measurement at GPIO level
-  static uint32_t gpio6_samples = 0, gpio7_samples = 0;
-  static int64_t gpio6_sum = 0, gpio7_sum = 0;  // For DC calculation
-  static int64_t gpio6_sum_sq = 0, gpio7_sum_sq = 0;
-
-  uint32_t lastReport = millis();
-  
-  for (;;) {
-    if (!adcHandle || !idfConfigured) {
-      vTaskDelay(1);
-      continue;
-    }
-
-    uint32_t outLen = 0;
-    const esp_err_t err = adc_continuous_read(adcHandle, rawBuf, sizeof(rawBuf), &outLen, ADC_MAX_DELAY);
-    adcTotalReads++;
+static inline int16_t dcDecouple(int16_t x, int32_t* dc) {
+    // x is the raw centered value (-2048 to 2047)
+    const int32_t xi = (int32_t)x;
+    const int32_t xq = xi << 8; // Move to Q8 space
     
-    if (err != ESP_OK) {
-      adcReadErrors++;
-      vTaskDelay(1);
-      continue;
-    }
-    if (outLen == 0) {
-      adcZeroLenReads++;
-      continue;
-    }
+    // Leaky integrator: dc = dc + (current - dc) >> shift
+    *dc += (xq - *dc) >> (int)IQ_ADC_DC_SHIFT;
     
-    // Report ADC noise every 5 seconds
-    if (IQ_ADC_NOISE_LOG && (millis() - lastReport) >= 5000) {
-      // Report raw ADC noise levels (AC component only, DC removed)
-      if (gpio6_samples > 0 && gpio7_samples > 0) {
-        // Calculate DC offsets
-        float gpio6_dc = (float)gpio6_sum / gpio6_samples;
-        float gpio7_dc = (float)gpio7_sum / gpio7_samples;
-        
-        // Calculate variance (AC noise squared)
-        float gpio6_var = ((float)gpio6_sum_sq / gpio6_samples) - (gpio6_dc * gpio6_dc);
-        float gpio7_var = ((float)gpio7_sum_sq / gpio7_samples) - (gpio7_dc * gpio7_dc);
-        
-        // RMS of AC component
-        float gpio6_rms = sqrtf(gpio6_var);
-        float gpio7_rms = sqrtf(gpio7_var);
-        
-        Serial.printf("[ADC Noise] GPIO6: %.1f counts (%.1fmV) DC=%.0f | GPIO7: %.1f counts (%.1fmV) DC=%.0f | Ratio: %.2fx\n",
-                      gpio6_rms, gpio6_rms * 0.232, gpio6_dc,
-                      gpio7_rms, gpio7_rms * 0.232, gpio7_dc,
-                      gpio7_rms / gpio6_rms);
-        // Reset for next measurement period
-        gpio6_samples = gpio7_samples = 0;
-        gpio6_sum = gpio7_sum = 0;
-        gpio6_sum_sq = gpio7_sum_sq = 0;
-      }
-      
-      lastReport = millis();
-    }
-
-    const size_t n = outLen / SOC_ADC_DIGI_RESULT_BYTES;
-    const adc_digi_output_data_t* s = (const adc_digi_output_data_t*)rawBuf;
-    for (size_t k = 0; k < n; ++k) {
-      adcTotalSamples++;
-      const uint32_t unit = s[k].type2.unit;
-      const uint32_t chan = s[k].type2.channel;
-      const uint32_t data = s[k].type2.data;
-      if (unit != (uint32_t)adcUnit) {
-        adcUnitMismatch++;
-        continue;
-      }
-
-      if (chan == (uint32_t)adcChanI) {
-        const int16_t iRaw = center12bit((int)data);
-        // Track GPIO6 noise (AC component)
-        gpio6_samples++;
-        gpio6_sum += iRaw;
-        gpio6_sum_sq += (int32_t)iRaw * (int32_t)iRaw;
-        
-        pendingICorr = iRaw;
-        prevIRaw = iRaw;
-        havePendingI = true;
-      } else if (chan == (uint32_t)adcChanQ) {
-        if (!havePendingI) continue;
-        const int16_t q = center12bit((int)data);
-        // Track GPIO7 noise (AC component)
-        gpio7_samples++;
-        gpio7_sum += q;
-        gpio7_sum_sq += (int32_t)q * (int32_t)q;
-        
-        const int16_t iAc = dcDecouple(pendingICorr, &dcI);
-        const int16_t qAc = dcDecouple(q, &dcQ);
-        ringPush({ iAc, qAc });
-        adcPushedPairs++;
-        havePendingI = false;
-      }
-    }
-  }
+    // Remove the average (dc >> 8) from the original signal
+    const int32_t dcInt = (*dc) >> 8;
+    int32_t y = xi - dcInt;
+    
+    // Clamp to signed 16-bit range
+    if (y > INT16_MAX) y = INT16_MAX;
+    if (y < INT16_MIN) y = INT16_MIN;
+    
+    return (int16_t)y;
 }
 
-static inline int16_t center12bit(int raw) {
-  // raw is typically 0..4095 on ESP32.
-  // Convert to signed roughly centered around 0.
-  return (int16_t)(raw - 2048);
+static inline int16_t center12bit(uint16_t raw) {
+    return (int16_t)raw - 2048;
 }
+
+static void ringPush(IqSample s) {
+    uint32_t next = (ringWrite + 1) % RING_BUF_SIZE;
+    if (next == ringRead) {
+        droppedPairs++;
+    } else {
+        ringBuffer[ringWrite] = s;
+        ringWrite = next;
+    }
+}
+
+// --- The Hardware Reader Task ---
+
+static void adcReaderTask(void* pvParameters) {
+    bool havePendingI = false;
+    int16_t pendingIValue = 0;
+
+    for (;;) {
+        uint32_t outLen = 0;
+        esp_err_t err = adc_digi_read_bytes(rawBuf, sizeof(rawBuf), &outLen, 10);
+
+        if (err == ESP_OK && outLen > 0) {
+            for (int i = 0; i < (int)outLen; i += 4) {
+                adc_digi_output_data_t *p = (adc_digi_output_data_t*)&rawBuf[i];
+                
+                if (p->type2.channel == 5) {
+                    pendingIValue = center12bit(p->type2.data);
+                    havePendingI = true;
+                } 
+                else if (p->type2.channel == 6 && havePendingI) {
+                    int16_t qRaw = center12bit(p->type2.data);
+                    
+                    // APPLY FIXED-POINT DECOUPLER
+                    //IqSample processed;
+                    int32_t valI = dcDecouple(pendingIValue, &dcI);
+                    int32_t valQ = dcDecouple(qRaw, &dcQ);
+                    
+                    // Apply 16x Digital Gain (Shift left by 4)
+                    valI <<= 4;
+                    valQ <<= 4;
+
+                    // 3. Saturate (Clamp) to prevent 16-bit overflow
+                    if (valI > 32767)  valI = 32767;
+                    if (valI < -32768) valI = -32768;
+                    if (valQ > 32767)  valQ = 32767;
+                    if (valQ < -32768) valQ = -32768;
+
+                    ringPush({ (int16_t)valI, (int16_t)valQ });
+                    havePendingI = false;
+                }
+            }
+        } else {
+            vTaskDelay(1);
+        }
+    }
+}
+
+// --- Initialization ---
 
 void iq_adc_setup() {
-  prevIRaw = 0;
-  dcI = 0;
-  dcQ = 0;
-  currentAttLevel = 255;
-  pinsConfigured = false;
-  adcReady = false;
+    pinMode(6, ANALOG);
+    pinMode(7, ANALOG);
 
-  droppedPairs = 0;
-  ringWrite = 0;
-  ringRead = 0;
+    // Initial DC estimates (optional: seed with your +170 value << 8)
+    dcI = 0;
+    dcQ = 0;
 
-  Serial.printf("[IQ] Using IDF ADC continuous mode @ %u conv/s (I/Q alternating).\n", (unsigned)IQ_ADC_CONV_RATE_HZ);
-  idfConfigured = idfInit();
-  if (!idfConfigured) {
-    Serial.printf("[IQ] ADC continuous init failed.\n");
-    return;
-  }
+    adc_digi_stop();
+    adc_digi_deinitialize();
+    
+    adc_digi_init_config_t init_cfg = {};
+    init_cfg.max_store_buf_size = 4096;
+    init_cfg.conv_num_each_intr = 256; 
+    adc_digi_initialize(&init_cfg);
 
-  const adc_atten_t atten = toIdfAtten(0);
-  if (!idfStart(atten)) {
-    Serial.printf("[IQ] Failed to start ADC continuous.\n");
-    return;
-  }
+    static adc_digi_pattern_config_t pattern[2];
+    pattern[0].atten = ADC_ATTEN_DB_0; // Your optimized 0dB
+    pattern[0].channel = ADC1_CHAN_I;
+    pattern[0].unit = 0;
+    pattern[0].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
 
-  // Start a dedicated reader task so loop() stalls won't overflow the ADC pool.
-  if (adcTask == nullptr) {
-    if (IQ_ADC_TASK_CORE >= 0) {
-      xTaskCreatePinnedToCore(adcReaderTask, "iq_adc", IQ_ADC_TASK_STACK, nullptr, IQ_ADC_TASK_PRIORITY, &adcTask, IQ_ADC_TASK_CORE);
-    } else {
-      xTaskCreate(adcReaderTask, "iq_adc", IQ_ADC_TASK_STACK, nullptr, IQ_ADC_TASK_PRIORITY, &adcTask);
+    pattern[1].atten = ADC_ATTEN_DB_0;
+    pattern[1].channel = ADC1_CHAN_Q;
+    pattern[1].unit = 0;
+    pattern[1].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
+
+    adc_digi_configuration_t dig_cfg = {};
+    dig_cfg.conv_limit_en = false;
+    dig_cfg.sample_freq_hz = 64000; 
+    dig_cfg.conv_mode = ADC_CONV_SINGLE_UNIT_1;
+    dig_cfg.format = ADC_DIGI_OUTPUT_FORMAT_TYPE2;
+    dig_cfg.adc_pattern = pattern;
+    dig_cfg.pattern_num = 2;
+
+    adc_digi_controller_configure(&dig_cfg);
+    adc_digi_start();
+
+    if (adcTask == nullptr) {
+        xTaskCreatePinnedToCore(adcReaderTask, "adc_task", 4096, NULL, 10, &adcTask, 1);
     }
-  }
-
-  pinsConfigured = true;
-  adcReady = true;
+    adcReady = true;
 }
 
-bool iq_adc_ready() { return adcReady; }
-
-void iq_adc_set_att_level(uint8_t level) {
-  if (!adcReady) return;
-  if (level == currentAttLevel) return;
-  currentAttLevel = level;
-
-  if (idfConfigured && adcHandle) {
-    const adc_atten_t atten = toIdfAtten(level);
-    idfStop();
-    (void)idfStart(atten);
-    return;
-  }
+uint32_t iq_adc_available() {
+    return (ringWrite - ringRead + RING_BUF_SIZE) % RING_BUF_SIZE;
 }
 
 IqSample iq_adc_read_iq() {
-  if (idfConfigured && adcHandle) {
-    IqSample s;
-    const uint32_t startMs = millis();
-    while (!ringPop(&s)) {
-      // Wait up to ~50ms for data, then return a zero sample.
-      if ((uint32_t)(millis() - startMs) > 50U) return { 0, 0 };
-      delay(0);
-    }
+    if (ringRead == ringWrite) return {0, 0};
+    IqSample s = ringBuffer[ringRead];
+    ringRead = (ringRead + 1) % RING_BUF_SIZE;
     return s;
-  }
-
-  return { 0, 0 };
 }
 
-size_t iq_adc_available() {
-  if (!adcReady) return 0;
-  return (size_t)ringCount();
-}
-
+bool iq_adc_ready() { return adcReady; }
 uint32_t iq_adc_dropped_pairs() { return droppedPairs; }
 
-uint32_t iq_adc_pool_overflows() {
-  return poolOvfCount;
+static uint8_t currentAttLevel = 255; // Initialize to an invalid value
+
+static inline adc_atten_t toIdfAtten(uint8_t level) {
+    switch (level) {
+        case 0:  return ADC_ATTEN_DB_0;  // 0 - 950mV
+        case 1:  return ADC_ATTEN_DB_6;  // 0 - 1250mV
+        default: return ADC_ATTEN_DB_12; // 0 - 3100mV (S3 default)
+    }
 }
 
-void iq_adc_print_stats(size_t nSamples) {
-  if (!adcReady) {
-    Serial.printf("[IQ] Not ready (ADC pins not attached).\n");
-    return;
-  }
-  if (nSamples == 0) return;
+void iq_adc_set_att_level(uint8_t level) {
+    if (!adcReady) return;
+    if (level == currentAttLevel) return; // No change needed
+    
+    currentAttLevel = level;
+    adc_atten_t newAtten = toIdfAtten(level);
 
-  int32_t sumI = 0, sumQ = 0;
-  int16_t minI = INT16_MAX, maxI = INT16_MIN;
-  int16_t minQ = INT16_MAX, maxQ = INT16_MIN;
+    // 1. Stop the ADC to reconfigure
+    adc_digi_stop();
 
-  // Quick-and-dirty energy estimate.
-  uint64_t sumSqI = 0, sumSqQ = 0;
+    // 2. Update the existing pattern configuration
+    // We use the same static pattern array defined in setup
+    static adc_digi_pattern_config_t pattern[2];
+    pattern[0].atten = (uint8_t)newAtten;
+    pattern[0].channel = ADC1_CHANNEL_5; // GPIO 6
+    pattern[0].unit = 0;
+    pattern[0].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
 
-  for (size_t k = 0; k < nSamples; ++k) {
-    const IqSample s = iq_adc_read_iq();
-    sumI += s.i;
-    sumQ += s.q;
-    if (s.i < minI) minI = s.i;
-    if (s.i > maxI) maxI = s.i;
-    if (s.q < minQ) minQ = s.q;
-    if (s.q > maxQ) maxQ = s.q;
-    sumSqI += (int32_t)s.i * (int32_t)s.i;
-    sumSqQ += (int32_t)s.q * (int32_t)s.q;
+    pattern[1].atten = (uint8_t)newAtten;
+    pattern[1].channel = ADC1_CHANNEL_6; // GPIO 7
+    pattern[1].unit = 0;
+    pattern[1].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
 
-    // Avoid starving the RTOS/WDT while doing large sample bursts.
-    // Yield frequently to avoid starving the loop task WDT.
-    delay(0);
-  }
+    // 3. Re-apply the configuration
+    adc_digi_configuration_t dig_cfg = {};
+    dig_cfg.conv_limit_en = false;
+    dig_cfg.sample_freq_hz = 64000; 
+    dig_cfg.conv_mode = ADC_CONV_SINGLE_UNIT_1;
+    dig_cfg.format = ADC_DIGI_OUTPUT_FORMAT_TYPE2;
+    dig_cfg.adc_pattern = pattern;
+    dig_cfg.pattern_num = 2;
 
-  const float meanI = (float)sumI / (float)nSamples;
-  const float meanQ = (float)sumQ / (float)nSamples;
-  const float rmsI = sqrtf((float)sumSqI / (float)nSamples);
-  const float rmsQ = sqrtf((float)sumSqQ / (float)nSamples);
+    adc_digi_controller_configure(&dig_cfg);
 
-  Serial.printf(
-    "[IQ] N=%u att=%u buf=%u drop=%u ovf=%u err=%u | I: mean=%.2f min=%d max=%d rms=%.2f | Q: mean=%.2f min=%d max=%d rms=%.2f\n",
-    (unsigned)nSamples,
-    (unsigned)currentAttLevel,
-    (unsigned)iq_adc_available(),
-    (unsigned)iq_adc_dropped_pairs(),
-    (unsigned)iq_adc_pool_overflows(),
-    (unsigned)adcReadErrors,
-    meanI,
-    (int)minI,
-    (int)maxI,
-    rmsI,
-    meanQ,
-    (int)minQ,
-    (int)maxQ,
-    rmsQ
-  );
+    // 4. Restart
+    adc_digi_start();
+    
+    Serial.printf("[IQ] Attenuation changed to level %u\n", level);
 }

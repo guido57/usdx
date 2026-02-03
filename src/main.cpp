@@ -1,8 +1,10 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <math.h>
 
 #include "configuration.h"
-#include "phy/si5351.h"
+#include "si5351.h"
+#include "ft8_tx.h"
 #include "iq_adc.h"
 #include "ui.h"
 #include "audio_filter.h"
@@ -10,7 +12,7 @@
 #include "demodulator.h"
 #include "cic_filter.h"
 #include "wifi_config.h"
-#include <math.h>
+#include "rx_att_pwm.h"
 
 // PSRAM init functions for manual initialization after I2S
 extern "C" {
@@ -19,6 +21,7 @@ extern "C" {
 }
 
 static SI5351 si5351;
+//FT8_TX ft8tx(si5351);
 
 static bool synthInitialized = false;
 static Si5351RxSynthState lastSynth = { 0, 0, SI5351_RX_MODE_LSB, 0, false, 700 };
@@ -539,21 +542,23 @@ void setup() {
   } else {
     Serial.printf("Failed to initialize I2S audio!\r\n");
   }
+
+  // Initialize RX attenuation PWM control
+  rxAttPwmInit();
+  setRxAttFromUi(0); // Set initial attenuation to maximum 0
 }
 
 void loop() {
+
+  uint32_t t0, dt;
+
+  // ---------------- UI ----------------
   ui_loop();
 
-  wifi_config_loop();
-
-  // Process audio (simple test: decimation + pass-through)
+  // ------------- Audio ---------------
   processAudioTest();
 
-  if (!synthInitialized) return;
-
-  // ------------------------------------------------------------------
-  // Check for changes in UI state 
-  // ------------------------------------------------------------------
+  // ----------- Synth control ----------
   const UiMode uiModeNow = ui_get_mode();
   Si5351RxSynthState now = {
     (uint32_t)ui_get_sifxtal(),
@@ -564,14 +569,29 @@ void loop() {
     ui_get_cw_offset(),
     ui_get_iq_phase(),
   };
-  // Including F_XTAL in synthStateChanged to handle crystal frequency changes
+
   if (synthStateChanged(now, lastSynth)) {
     si5351.fxtal = now.fxtalHz;
     programSi5351Rx(si5351, now);
     lastSynth = now;
-    
   }
 
-  // Keep ADC attenuation in sync with UI ATT (main.ori-style sensitivity control).
-  iq_adc_set_att_level((uint8_t)ui_get_att());
+  // ------------- ADC ATT --------------
+  // iq_adc_set_att_level((uint8_t)ui_get_att());
+  iq_adc_set_att_level(0); // ADC attenuation always 0 dB
+  setRxAttFromUi((uint8_t)ui_get_att_rf()); // Set RF attenuation from UI
+
+    // Example trigger from serial
+  // if (Serial.available()) {
+  //     Serial.read();
+
+  //     if (ft8tx.requestTransmission("IW5ALZ K1ABC JN89"))
+  //         Serial.println("FT8 scheduled for next slot");
+  //     else
+  //         Serial.println("TX busy or encode error");
+  // }
+
+  // Your DSP / ADC processing can block here safely
+  //delay(200);
+   
 }

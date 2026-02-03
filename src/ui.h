@@ -29,6 +29,7 @@ struct UiSettings {
 	int8_t agc;
 	int8_t nr;
 	int8_t att;
+	int8_t att_rf;
 	int8_t smode;
 	int8_t cw_tone;
 	int16_t cw_offset;
@@ -73,6 +74,7 @@ int8_t ui_get_wf_thresh();
 int32_t ui_get_sifxtal();
 
 int8_t ui_get_att();
+int8_t ui_get_att_rf();
 
 // Audio-related UI settings
 int8_t ui_get_filter();
