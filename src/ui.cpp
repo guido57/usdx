@@ -23,10 +23,12 @@ static volatile uint8_t stepsize = STEP_1k;
 static int32_t vfo[2] = { 7100000, 7200000 };
 static uint8_t vfoSel = 0;  // 0=A, 1=B
 static Mode vfomode[2] = { LSB, LSB };
+static int32_t ft8_offset = 1500; // Hz
+static char ft8_testmsg[64] = ""; // FT8 test message
 
-static const uint8_t N_BANDS = 11;
+static const uint8_t N_BANDS = 10;
 static const int32_t bands[N_BANDS] = {
-  1840000, 3573000, 5357000, 7074000, 10136000, 14074000, 18100000, 21074000, 24915000, 28074000, 50313000
+  1840000, 3573000, 5357000, 7074000, 10136000, 14074000, 18100000, 21074000, 24915000, 28074000
 };
 static int32_t bandval = 3;  // default 40m FT8-ish like main.ori
 
@@ -40,6 +42,7 @@ static int8_t agc = 1;
 static int8_t nr = 0;
 static int8_t att = 0;
 static int8_t att_rf = 0;
+static int8_t tx_bias = 0;
 static int8_t smode = 1;
 static int8_t cw_tone = 2;
 static int16_t cw_offset = 700;
@@ -90,6 +93,7 @@ float ui_get_iq_delay() { return iq_delay / 100.0f; }
 int32_t ui_get_sifxtal() { return sifxtal; }
 int8_t ui_get_att() { return att; }
 int8_t ui_get_att_rf() { return att_rf; }
+int8_t ui_get_tx_bias() { return tx_bias; }
 int8_t ui_get_agc() { return agc; }
 int8_t ui_get_wf_thresh() { return wf_thresh; }
 
@@ -103,7 +107,8 @@ static volatile int8_t menu = 0;
 
 // Input devices
 static Display lcd(I2C_SDA, I2C_SCL, 0x3C);
-static Encoder encoder;
+static Encoder encoder_freq;
+static Encoder encoder_menu;
 
 // Button tracking for gestures
 struct ButtonTracker {
@@ -119,7 +124,8 @@ static ButtonTracker btn[3];
 enum EventFlags { SC = 0x01, DC = 0x02, PL = 0x04, PLC = 0x05, PT = 0x0C };
 static const uint8_t BTN_L_CODE = 0x10;  // left
 static const uint8_t BTN_R_CODE = 0x20;  // right
-static const uint8_t BTN_E_CODE = 0x30;  // encoder press
+static const uint8_t BTN_E_CODE = 0x30;  // encoder_freq press
+static const uint8_t BTN_M_CODE = 0x40;  // encoder_menu press
 
 static volatile uint8_t pendingEvent = 0;
 static volatile bool eventAvailable = false;
@@ -153,6 +159,8 @@ static void loadSettings() {
   vfoSel = s.vfoSel ? 1 : 0;
   vfo[0] = constrain(s.vfoA, 1, 999999999);
   vfo[1] = constrain(s.vfoB, 1, 999999999);
+  ft8_offset = constrain(s.ft8_offset, 0, 3000);
+  strlcpy(ft8_testmsg, s.ft8_testmsg, sizeof(ft8_testmsg));
   bandval = constrain(s.bandval, 0, (int32_t)N_BANDS - 1);
   rit = constrain(s.rit, (int16_t)-9999, (int16_t)9999);
   ritActive = (s.ritActive != 0);
@@ -162,6 +170,7 @@ static void loadSettings() {
   nr = constrain(s.nr, (int8_t)0, (int8_t)1);
   att = constrain(s.att, (int8_t)0, (int8_t)2);
   att_rf = constrain(s.att_rf, (int8_t)0, (int8_t)30);
+  tx_bias = constrain(s.tx_bias, (int8_t)0, (int8_t)33);
   smode = constrain(s.smode, (int8_t)0, (int8_t)6);
   cw_tone = constrain(s.cw_tone, (int8_t)0, (int8_t)5);
   cw_offset = constrain(s.cw_offset, (int16_t)300, (int16_t)1200);
@@ -196,6 +205,8 @@ bool ui_get_settings(UiSettings* out) {
   out->vfoA = vfo[0];
   out->vfoB = vfo[1];
   out->bandval = bandval;
+  out->ft8_offset = ft8_offset;
+  strlcpy(out->ft8_testmsg, ft8_testmsg, sizeof(out->ft8_testmsg));
   out->rit = rit;
   out->ritActive = ritActive ? 1 : 0;
   out->volume = volume;
@@ -204,6 +215,7 @@ bool ui_get_settings(UiSettings* out) {
   out->nr = nr;
   out->att = att;
   out->att_rf = att_rf;
+  out->tx_bias = tx_bias;
   out->smode = smode;
   out->cw_tone = cw_tone;
   out->cw_offset = cw_offset;
@@ -226,6 +238,8 @@ void ui_apply_settings(const UiSettings& s) {
   vfoSel = s.vfoSel ? 1 : 0;
   vfo[0] = constrain(s.vfoA, 1, 999999999);
   vfo[1] = constrain(s.vfoB, 1, 999999999);
+  ft8_offset = constrain(s.ft8_offset, 0, 3000);
+  strlcpy(ft8_testmsg, s.ft8_testmsg, sizeof(ft8_testmsg));
   bandval = constrain(s.bandval, 0, (int32_t)N_BANDS - 1);
   rit = constrain(s.rit, (int16_t)-9999, (int16_t)9999);
   ritActive = (s.ritActive != 0);
@@ -235,6 +249,7 @@ void ui_apply_settings(const UiSettings& s) {
   nr = constrain(s.nr, (int8_t)0, (int8_t)1);
   att = constrain(s.att, (int8_t)0, (int8_t)2);
   att_rf = constrain(s.att_rf, (int8_t)0, (int8_t)30);
+  tx_bias = constrain(s.tx_bias, (int8_t)0, (int8_t)33);
   smode = constrain(s.smode, (int8_t)0, (int8_t)6);
   cw_tone = constrain(s.cw_tone, (int8_t)0, (int8_t)5);
   cw_offset = constrain(s.cw_offset, (int16_t)300, (int16_t)1200);
@@ -271,6 +286,8 @@ static void saveSettings() {
   s.vfomode1 = (uint8_t)vfomode[1];
   s.vfoA = vfo[0];
   s.vfoB = vfo[1];
+  s.ft8_offset = ft8_offset;
+  strlcpy(s.ft8_testmsg, ft8_testmsg, sizeof(s.ft8_testmsg));
   s.bandval = bandval;
   s.rit = rit;
   s.ritActive = ritActive ? 1 : 0;
@@ -280,6 +297,7 @@ static void saveSettings() {
   s.nr = nr;
   s.att = att;
   s.att_rf = att_rf;
+  s.tx_bias = tx_bias;
   s.smode = smode;
   s.cw_tone = cw_tone;
   s.cw_offset = cw_offset;
@@ -347,6 +365,7 @@ struct Param {
 static int32_t param_mode = mode;
 static int32_t param_step = stepsize;
 static int32_t param_band = bandval;
+static int32_t param_ft8_offset = ft8_offset;
 static int32_t param_vfo_sel = vfoSel;
 static int32_t param_freqA = vfo[0];
 static int32_t param_freqB = vfo[1];
@@ -359,6 +378,7 @@ static int32_t param_agc = agc;
 static int32_t param_nr = nr;
 static int32_t param_att = att;
 static int32_t param_att_rf = att_rf;
+static int32_t param_tx_bias = tx_bias;
 static int32_t param_smode = smode;
 static int32_t param_cw_tone = cw_tone;
 static int32_t param_cw_offset = cw_offset;
@@ -381,6 +401,7 @@ static Param params[] = {
   { "Mode",      &param_mode,      0, N_MODES - 1, true,  P_ENUM, kModeLabel, (uint8_t)N_MODES },
   { "Step",      &param_step,      STEP_1M, STEP_1, false, P_ENUM, kStepLabel, (uint8_t)(sizeof(kStepLabel) / sizeof(kStepLabel[0])) },
   { "Band",      &param_band,      0, N_BANDS - 1, true,  P_BAND, nullptr, 0 },
+  { "FT8 Offset", &param_ft8_offset, 0, 3000, false, P_INT, nullptr, 0 },
   { "VFO Sel",   &param_vfo_sel,   0, 1, true,            P_INT,  nullptr, 0 },
   { "Freq A",    &param_freqA,     1, 999999999, false,   P_FREQ, nullptr, 0 },
   { "Freq B",    &param_freqB,     1, 999999999, false,   P_FREQ, nullptr, 0 },
@@ -395,6 +416,7 @@ static Param params[] = {
   { "ATT",       &param_att,       0, 2, true,            P_INT,  nullptr, 0 },
   { "ATT RF",    &param_att_rf,    0, 30, true,            P_INT,  nullptr, 0 },
   { "S-Meter",   &param_smode,     0, 6, true,            P_ENUM, kSmodeLabel, (uint8_t)(sizeof(kSmodeLabel) / sizeof(kSmodeLabel[0])) },
+  { "TX Bias",   &param_tx_bias,   0, 33, true,            P_INT,  nullptr, 0 },
 
   { "CW Tone",   &param_cw_tone,   0, 5, true,            P_INT,  nullptr, 0 },
   { "CW Off",    &param_cw_offset, 300, 1200, false,      P_INT,  nullptr, 0 },
@@ -439,6 +461,7 @@ static void syncParamsToState() {
   param_mode = mode;
   param_step = stepsize;
   param_band = bandval;
+  param_ft8_offset = ft8_offset;
   param_vfo_sel = vfoSel;
   param_freqA = vfo[0];
   param_freqB = vfo[1];
@@ -450,7 +473,7 @@ static void syncParamsToState() {
   param_nr = nr;
   param_att = att;
   param_att_rf = att_rf;
-  param_smode = smode;
+  param_tx_bias = tx_bias;
   param_cw_tone = cw_tone;
   param_cw_offset = cw_offset;
   param_vox = vox;
@@ -465,6 +488,7 @@ static void syncParamsToState() {
   // param_iq_phase retains its adjusted value
 }
 
+// Apply parameter values to UI state variables
 static void applyParamToState() {
   const uint8_t prevVfoSel = vfoSel;
   const int32_t prevBand = bandval;
@@ -477,11 +501,12 @@ static void applyParamToState() {
   ritActive = (param_rit_en != 0);
   volume = static_cast<int8_t>(constrain(param_volume, 0, 10));
   filt = static_cast<int8_t>(constrain(param_filter, 0, 7));
-
+  ft8_offset = constrain(param_ft8_offset, 0, 3000);
   agc = static_cast<int8_t>(constrain(param_agc, 0, 1));
   nr = static_cast<int8_t>(constrain(param_nr, 0, 1));
   att = static_cast<int8_t>(constrain(param_att, 0, 2));
   att_rf = static_cast<int8_t>(constrain(param_att_rf, 0, 30));
+  tx_bias = static_cast<int8_t>(constrain(param_tx_bias, 0, 33));
   smode = static_cast<int8_t>(constrain(param_smode, 0, 6));
   cw_tone = static_cast<int8_t>(constrain(param_cw_tone, 0, 5));
   cw_offset = static_cast<int16_t>(constrain(param_cw_offset, 300, 1200));
@@ -555,9 +580,10 @@ void drawWifiIcon(int x, int y, uint8_t bars)
 {
     for (int i = 0; i < 4; i++) {
         int h = (i + 1) * 3;
-        if (i < bars)
+        lcd.raw().fillRect(x + i*4, y - h, 3, h, BLACK);
+        if (i < bars){
             lcd.raw().fillRect(x + i*4, y - h, 3, h, WHITE);
-        else
+        }else
             lcd.raw().drawRect(x + i*4, y - h, 3, h, WHITE);
     }
 }
@@ -573,11 +599,39 @@ void drawFt8Icon(int x, int y, Ft8IconState state)
     lcd.raw().drawRect(x, y, 8, 8, WHITE);  // border
 
     if (state == FT8_IDLE) {
+        lcd.raw().fillRect(x+1, y+1, 6, 6, BLACK); // clear inside
         lcd.raw().drawPixel(x+3, y+3, WHITE);   // small dot
     }
     else if (state == FT8_ACTIVE) {
         lcd.raw().fillRect(x+1, y+1, 6, 6, WHITE); // filled
     }
+}
+
+static void renderIcons() {
+
+  static int8_t lastWifiBars = -1;
+  static Ft8IconState lastS = (Ft8IconState)-1;
+  static uint32_t lastFlashTime = 0;
+
+  Ft8IconState current_s;
+
+  if (!g_ft8ServerConnected)
+      current_s = FT8_OFF;
+  // if (g_ft8ServerActive && ((millis()/400) % 2)){
+  if (g_ft8ServerActive ){ // don't flash, just show active while server is active
+      current_s = FT8_ACTIVE;
+  }else{
+      current_s = FT8_IDLE;
+  }
+
+  if(current_s != lastS || g_wifiBars != lastWifiBars){
+      drawFt8Icon(105, 0, current_s);   // top-right corner
+      drawWifiIcon(110, 16, g_wifiBars);
+      lcd.flush();
+      lastFlashTime = millis();
+      lastS = current_s;
+      lastWifiBars = g_wifiBars;
+  }
 }
 
 static void renderHome() {
@@ -598,19 +652,6 @@ static void renderHome() {
   lcd.setCursor(0, 40);
   lcd.raw().print(F("Vol  "));
   lcd.raw().print(volume);
-
-  drawWifiIcon(110, 16, g_wifiBars);
-
-  Ft8IconState s;
-
-  if (!g_ft8ServerConnected)
-      s = FT8_OFF;
-  if (g_ft8ServerActive && ((millis()/400) % 2))
-      s = FT8_ACTIVE;
-  else
-      s = FT8_IDLE;
-
-  drawFt8Icon(105, 0, s);   // top-right corner
 
   // Waterfall area (bottom 16 pixels)
   lcd.raw().fillRect(0, 48, 128, 16, SSD1306_BLACK);
@@ -664,14 +705,14 @@ static void process_encoder_tuning_step(int8_t steps) {
 static void stepsize_change(int8_t val) {
   int16_t next = static_cast<int16_t>(stepsize) + val;
   // Cycle through all defined step sizes in the UI range, including 10k and 1.
-  // Keep 10M and 500k out of the encoder cycle to match the menu's editable range.
+  // Keep 10M and 500k out of the encoder_freq cycle to match the menu's editable range.
   if (next < STEP_1M) next = STEP_1;
   if (next > STEP_1) next = STEP_1M;
   stepsize = static_cast<uint8_t>(next);
   change = true;
 }
 
-// --- Button/encoder event handling ---
+// --- Button/encoder_freq event handling ---
 static uint8_t encodeEvent(uint8_t buttonNibble, uint8_t action) {
   return buttonNibble | action;
 }
@@ -681,7 +722,7 @@ static void queueEvent(uint8_t ev) {
   eventAvailable = true;
 }
 
-static void handleRotate(int8_t direction) {
+static void handleRotateFreq(int8_t direction) {
   // Note if a button is held, mark it for push-turn detection
   for (int i = 0; i < 3; ++i) {
     if (btn[i].down) btn[i].rotatedWhileHeld = true;
@@ -699,7 +740,10 @@ static void handleRotate(int8_t direction) {
   }
 }
 
-static void handleButton(uint8_t id, bool pressed) {
+static void handleButtonFreq(uint8_t id, bool pressed) {
+  
+  Serial.printf("Button Freq %d %s\n", id, pressed ? "pressed" : "released");  
+  
   const uint32_t LONG_PRESS_MS = 600;
   const uint32_t DOUBLE_MS = 350;
   ButtonTracker& b = btn[id];
@@ -743,6 +787,70 @@ static void handleButton(uint8_t id, bool pressed) {
     queueEvent(encodeEvent((id == Encoder::BTN_LEFT) ? BTN_L_CODE : (id == Encoder::BTN_RIGHT) ? BTN_R_CODE : BTN_E_CODE, SC));
   }
 }
+
+static void handleRotateMenu(int8_t direction) {
+  // Note if a button is held, mark it for push-turn detection
+  for (int i = 0; i < 3; ++i) {
+    if (btn[i].down) btn[i].rotatedWhileHeld = true;
+  }
+
+  if (menumode == 0) {                         // home
+    volume = constrain(volume + direction, 0, 10); 
+    param_volume = volume;  
+    change = true; 
+  } else if (menumode == 1) {                  // menu select 
+    menu += direction;
+    if (menu < 0) menu = N_PARAMS - 1;
+    if (menu >= N_PARAMS) menu = 0;
+    change = true;
+  } else if (menumode == 2) {                  // edit param
+    adjustParam(direction);
+  }
+}
+
+// detects short press, long press and push-turn for the menu button
+static void handleButtonMenu(uint8_t id, bool pressed) {
+
+  Serial.printf("Button Menu %d %s\n", id, pressed ? "pressed" : "released");  
+  
+  const uint32_t LONG_PRESS_MS = 600;
+  ButtonTracker& b = btn[id]; 
+
+  if (pressed) {
+    b.down = true;
+    b.pressedAt = millis();
+    b.rotatedWhileHeld = false;
+    return;
+  }
+
+  // release
+  if (!b.down) return;
+  b.down = false;
+
+  uint32_t now = millis();
+  uint32_t duration = now - b.pressedAt;
+
+  // 👉 DEBOUNCE GUARD HERE
+  if (duration < 25) return;
+
+  // push-turn wins
+  if (b.rotatedWhileHeld) {
+    queueEvent(encodeEvent(BTN_M_CODE, PT));
+    b.rotatedWhileHeld = false;
+    return;
+  }
+
+  if (duration >= LONG_PRESS_MS) {
+    queueEvent(encodeEvent(BTN_M_CODE, PL));
+    return;
+  }
+
+  // short press -> single click detection
+  queueEvent(encodeEvent(BTN_M_CODE, SC));
+    
+  
+}
+
 
 static void processEvent(uint8_t event) {
   switch (event) {
@@ -794,10 +902,14 @@ static void processEvent(uint8_t event) {
     case BTN_R_CODE | PT:  // push-turn: quick stepsize down
       stepsize_change(-1); break;
 
-    // Encoder button events
+    // Frequency Encoder button events
     case BTN_E_CODE | SC:  // short: stepsize up or toggle menu selection
-      if (!menumode) stepsize_change(+1); else menumode = (menumode == 1) ? 2 : 1; change = true; break;
-    case BTN_E_CODE | DC: { // double: cycle through a small band list
+      if (!menumode) 
+        stepsize_change(+1);
+      else 
+        menumode = (menumode == 1) ? 2 : 1; change = true; 
+      break;
+    case BTN_E_CODE | DC:  // double: cycle through a small band list
       bandval = (bandval + 1) % N_BANDS;
       param_band = bandval;
       setCurrentFreq(bands[bandval]);
@@ -805,28 +917,50 @@ static void processEvent(uint8_t event) {
       else param_freqB = vfo[1];
       change = true;
       break;
-    }
+    
     case BTN_E_CODE | PL:  // long: stepsize down
-      stepsize_change(-1); break;
+      stepsize_change(-1); 
+      break;
     case BTN_E_CODE | PT:  // push-turn: adjust volume up one notch
       volume = constrain(volume + 1, 0, 10); param_volume = volume; change = true; break;
+      break;
+  
+    // Menu Encoder button events
+    case BTN_M_CODE | SC:  // short: enter or exit menu, or toggle edit mode
+      menumode = (menumode+1)%3; change = true; 
+      break;
+    
+    case BTN_M_CODE | PL:  // long: stepsize down
+      Serial.println("Menu Button Long Press");
+      break;
+    case BTN_M_CODE | PT:  // push-turn: adjust volume up one notch
+      Serial.println("Menu Button Push-Turn");
+      volume = constrain(volume + 1, 0, 10); param_volume = volume; change = true; break;
+      break;
+  
   }
 }
 
 void ui_setup() {
   
   // I2C is initialized in main.cpp (shared bus for OLED + SI5351)
-
+  Serial.println("Initializing display...");
   if (!lcd.begin()) {
     Serial.println("Display init failed");
     while (true) { delay(1000); }
   }else {
-    Serial.println("Display initialized");
+    Serial.println("Display initialized"); 
   }
+  lcd.showTestPattern();
 
-  encoder.begin(GPIO_ROT_A, GPIO_ROT_B, GPIO_ROT_SW, GPIO_L_SW, GPIO_R_SW);
-  encoder.onRotate(handleRotate);
-  encoder.onButton(handleButton);
+  encoder_freq.begin(GPIO_ROT_A, GPIO_ROT_B, GPIO_ROT_SW, GPIO_L_SW, GPIO_R_SW);
+  encoder_freq.onRotate(handleRotateFreq);
+  encoder_freq.onButton(handleButtonFreq);
+
+  encoder_menu.begin(GPIO_ROT_MENU_A, GPIO_ROT_MENU_B, GPIO_ROT_MENU_SW, 255, 255);
+  encoder_menu.onRotate(handleRotateMenu);
+  encoder_menu.onButton(handleButtonMenu);
+
 
   if (!settingsLoaded) {
     loadSettings();
@@ -841,8 +975,10 @@ void ui_load_settings() {
   syncParamsToState();
 }
 
+unsigned long lastRenderIcons = 0;
 void ui_loop() {
-  encoder.update();
+  encoder_freq.update();
+  encoder_menu.update();
 
   if (eventAvailable) {
     uint8_t ev = pendingEvent;
@@ -859,7 +995,10 @@ void ui_loop() {
     waterfallDirty = false;
     renderHome();
   }
-
+  if(millis() - lastRenderIcons > 100) {
+    lastRenderIcons = millis();
+    renderIcons();
+  }  
   if (settingsDirty && (uint32_t)(millis() - settingsLastChangeMs) > 1500U) {
     saveSettings();
     settingsDirty = false;

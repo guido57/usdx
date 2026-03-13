@@ -80,7 +80,33 @@ async function fetchUi(){
     }
   }catch(e){console.error(e);}
 }
-fetchUi();
+
+// FT8 Controls
+const ft8Status = document.getElementById('ft8-status');
+const ft8Freq = document.getElementById('ft8-frequency');
+const ft8Offset = document.getElementById('ft8-offset');
+const ft8TestMsg = document.getElementById('ft8-testmsg');
+
+async function init() {
+    await fetchUi(); // Wait for the UI to be built from the API
+    
+    // Now that the elements exist, set the initial FT8 settings 
+    const bandInput = document.querySelector('input[name="bandval"]');
+    if (bandInput && ft8Freq) {
+        ft8Freq.selectedIndex = parseInt(bandInput.value) || 0;
+    }
+    
+    const offsetInput = document.querySelector('input[name="ft8_offset"]');
+    if (offsetInput && ft8Offset) {
+        ft8Offset.value = offsetInput.value || 0;   
+    }
+
+    const testMsgInput = document.querySelector('input[name="ft8_testmsg"]');
+    if (testMsgInput && ft8TestMsg) {
+        ft8TestMsg.value = testMsgInput.value || '';   
+    }
+}
+init();
 
 // UI Form
 document.getElementById('uiForm')?.addEventListener('submit', async e=>{
@@ -91,14 +117,13 @@ document.getElementById('uiForm')?.addEventListener('submit', async e=>{
   alert('Settings applied');
 });
 
-// FT8 Control
-const ft8Status = document.getElementById('ft8-status');
-const ft8Freq = document.getElementById('ft8-frequency');
-
+// FT8 Controls
 document.getElementById('ft8-start')?.addEventListener('click', () => {
-    fetch('/api/ft8/start', { method: 'POST' })
-        .then(r => r.json())
-        .then(data => ft8Status.innerText = 'Status: ' + data.message);
+    fetch('/api/ft8/start', { method: 'POST',
+        body: JSON.stringify({ freq: parseInt(ft8Freq.value)+parseInt(ft8Offset.value), msg: ft8TestMsg.value })
+     })
+     .then(r => r.json())
+     .then(data => ft8Status.innerText = 'Status: ' + data.message);
 });
 
 document.getElementById('ft8-stop')?.addEventListener('click', () => {
@@ -110,10 +135,59 @@ document.getElementById('ft8-stop')?.addEventListener('click', () => {
 document.getElementById('ft8-send-test')?.addEventListener('click', () => {
     fetch('/api/ft8/send', {
         method: 'POST',
-        body: JSON.stringify({ freq: parseInt(ft8Freq.value) })
+        body: JSON.stringify({ freq: parseInt(ft8Freq.value)+parseInt(ft8Offset.value), msg: ft8TestMsg.value })
     })
     .then(r => r.json())
     .then(data => ft8Status.innerText = 'Status: ' + data.message);
+});
+
+// generic function to sync a control with the master input and save
+async function syncAndSave(controlEl, targetName) {
+  const masterInput = document.querySelector(`input[name="${targetName}"]`);
+  if (!masterInput) return;
+
+  // Update the master input value
+  // If it's a select, we use selectedIndex; otherwise, we use the value.
+  masterInput.value = (controlEl.tagName === 'SELECT') ? controlEl.selectedIndex : controlEl.value;
+
+  // Collect all data from the main form and save
+  const uiForm = document.getElementById('uiForm');
+  const formData = new FormData(uiForm);
+  const data = Object.fromEntries(formData.entries());
+
+  try {
+    await fetch('/api/ui/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    console.log(`Saved ${targetName}: ${masterInput.value}`);
+  } catch (e) {
+    console.error("Auto-save failed:", e);
+  }
+}
+
+// For the Frequency dropdown
+ft8Freq?.addEventListener('change', (e) => {
+    // Change also the tuned frequency in the main UI form
+    frequencyInput = document.querySelector('input[name="vfoA"]');
+    if (frequencyInput) {
+        frequencyInput.value = ft8Freq.value;
+    }
+    syncAndSave(e.target, 'bandval');
+    // also sync the main VFO frequency
+    syncAndSave(document.querySelector(`input[name="vfoA"]`),'bandval')
+    
+});
+
+// For the FT8 Offset input
+ft8Offset?.addEventListener('change', (e) => {
+    syncAndSave(e.target, 'ft8_offset');
+});
+
+// For the FT8 Test Message input
+ft8TestMsg?.addEventListener('change', (e) => {
+    syncAndSave(e.target, 'ft8_testmsg');
 });
 
 // FT8 Spots & QSO
@@ -237,6 +311,7 @@ async function fetchFt8Spots(){
     try{
         const resp = await fetch('/api/ft8/spots');
         const data = await resp.json();
+        spotsTableBody.replaceChildren(); // clears all rows
         data.forEach(addSpot);
     }catch(e){console.error(e);}
 }

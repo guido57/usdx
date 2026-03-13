@@ -5,12 +5,17 @@
 
 class FT8_TX {
 public:
-    FT8_TX(SI5351 &clock);
 
+    uint32_t baseFreq;
+    char message[64];
+    FT8_TX(SI5351 &clock);
+   
     void begin(uint32_t baseFreqHz);
 
     // Ask to send an FT8 message in next slot
-    bool requestTransmission(const char *msg);
+    bool requestTransmission(uint32_t baseFreqHz, const char *msg);
+    bool startContinuousTransmission(uint32_t baseFreqHz, const char *msg);
+    bool stopContinuousTransmission();
 
 private:
     static void taskEntry(void *param);
@@ -19,10 +24,10 @@ private:
 
     SI5351 &si5351;
 
-    uint32_t baseFreq;
     uint8_t symbols[79];
 
     volatile bool txRequested = false;
+    volatile bool txContinuous = false;
 
     static constexpr uint16_t toneSpacing = 625;   // 6.25 Hz
     static constexpr uint16_t toneDelayMs = 159;   // FT8 symbol length

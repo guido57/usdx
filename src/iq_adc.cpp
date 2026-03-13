@@ -21,6 +21,7 @@ static uint32_t droppedPairs = 0;
 
 static TaskHandle_t adcTask = nullptr;
 static bool adcReady = false;
+static esp_err_t _iq_adc_error = ESP_OK;
 
 // DC estimates stored in Q8 fixed-point (value << 8)
 static int32_t dcI = 0;  
@@ -64,17 +65,20 @@ static void ringPush(IqSample s) {
     }
 }
 
+esp_err_t iq_adc_error() {
+    return _iq_adc_error;
+}
+
 // --- The Hardware Reader Task ---
 
 static void adcReaderTask(void* pvParameters) {
     bool havePendingI = false;
     int16_t pendingIValue = 0;
-
+    Serial.printf("ADC Reader Task started on core %d\r\n", xPortGetCoreID());
     for (;;) {
         uint32_t outLen = 0;
-        esp_err_t err = adc_digi_read_bytes(rawBuf, sizeof(rawBuf), &outLen, 10);
-
-        if (err == ESP_OK && outLen > 0) {
+        _iq_adc_error = adc_digi_read_bytes(rawBuf, sizeof(rawBuf), &outLen, 10);
+        if (iq_adc_error() == ESP_OK && outLen > 0) {
             for (int i = 0; i < (int)outLen; i += 4) {
                 adc_digi_output_data_t *p = (adc_digi_output_data_t*)&rawBuf[i];
                 
@@ -107,6 +111,7 @@ static void adcReaderTask(void* pvParameters) {
         } else {
             vTaskDelay(1);
         }
+        
     }
 }
 
@@ -178,6 +183,44 @@ static inline adc_atten_t toIdfAtten(uint8_t level) {
         case 1:  return ADC_ATTEN_DB_6;  // 0 - 1250mV
         default: return ADC_ATTEN_DB_12; // 0 - 3100mV (S3 default)
     }
+}
+
+
+void iq_adc_restart() {
+    if (!adcReady) return;
+    
+    
+    // 1. Stop the ADC to reconfigure
+    adc_digi_stop();
+
+    // 2. Update the existing pattern configuration
+    // We use the same static pattern array defined in setup
+    static adc_digi_pattern_config_t pattern[2];
+    pattern[0].atten = ADC_ATTEN_DB_0; // Your optimized 0dB
+    pattern[0].channel = ADC1_CHAN_I; 
+    pattern[0].unit = 0;
+    pattern[0].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
+
+    pattern[1].atten = ADC_ATTEN_DB_0;
+    pattern[1].channel = ADC1_CHAN_Q; 
+    pattern[1].unit = 0;
+    pattern[1].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
+
+    // 3. Re-apply the configuration
+    adc_digi_configuration_t dig_cfg = {};
+    dig_cfg.conv_limit_en = false;
+    dig_cfg.sample_freq_hz = 64000; 
+    dig_cfg.conv_mode = ADC_CONV_SINGLE_UNIT_1;
+    dig_cfg.format = ADC_DIGI_OUTPUT_FORMAT_TYPE2;
+    dig_cfg.adc_pattern = pattern;
+    dig_cfg.pattern_num = 2;
+
+    adc_digi_controller_configure(&dig_cfg);
+
+    // 4. Restart
+    adc_digi_start();
+    
+    Serial.printf("[IQ] ADC restarted\n");
 }
 
 void iq_adc_set_att_level(uint8_t level) {

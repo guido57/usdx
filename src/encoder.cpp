@@ -25,10 +25,12 @@ void Encoder::begin(uint8_t rotA, uint8_t rotB, uint8_t rotSW,
   pinMode(_pinRotA, INPUT_PULLUP);
   pinMode(_pinRotB, INPUT_PULLUP);
   pinMode(_pinRotSW, INPUT_PULLUP);
-  pinMode(_pinLeftSW, INPUT_PULLUP);
-  pinMode(_pinRightSW, INPUT_PULLUP);
+  if(_pinLeftSW != 255)
+    pinMode(_pinLeftSW, INPUT_PULLUP);
+  if(_pinRightSW != 255)
+    pinMode(_pinRightSW, INPUT_PULLUP);
   
-  // Read initial encoder state
+  // Read initial encoder_freq state
   _lastEncoderState = (digitalRead(_pinRotB) << 1) | digitalRead(_pinRotA);
 }
 

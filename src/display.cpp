@@ -5,10 +5,14 @@ Display::Display(uint8_t sdaPin, uint8_t sclPin, uint8_t address)
   : _sda(sdaPin), _scl(sclPin), _address(address), _oled(kWidth, kHeight, &Wire, kResetPin) {}
 
 bool Display::begin() {
-  if (!_oled.begin(SSD1306_SWITCHCAPVCC, _address)) {
+  // Initialize I2C with custom pins (shared by OLED and SI5351)
+  // Wire is initialized in main.cpp
+  
+  if (!_oled.begin(SSD1306_SWITCHCAPVCC, _address, false, false)) {
     return false;
   }
 
+  delay(10); // Small delay to allow OLED to initialize
   _oled.clearDisplay();
   _oled.display();
   return true;

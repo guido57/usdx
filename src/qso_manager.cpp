@@ -41,7 +41,7 @@ void addOrUpdate(const Ft8Spot &s) {
     // -------------------------
     // 1️⃣ Look for an existing QSO
     // -------------------------
-    Serial.printf("Processing spot: %s -> %s  s.grid=%s  qso_list has %d entries\n", caller, receiver, s.grid, (int)qso_list.size());
+    //Serial.printf("Processing spot: %s -> %s  s.grid=%s  qso_list has %d entries\n", caller, receiver, s.grid, (int)qso_list.size());
     for (auto &q : qso_list) {
         if ( ((strcmp(q.call1, caller) == 0  ) && (strlen(q.call1) > 0) && (strlen(q.call2) == 0)) ||                       // call2 is empty.                 caller is call1 
              ((strcmp(q.call2, caller) == 0  ) && (strlen(q.call2) > 0) && (strlen(q.call1) == 0)) ||                       // call1 is empty. It shouldn't happen but just in case. caller is call2
@@ -58,7 +58,7 @@ void addOrUpdate(const Ft8Spot &s) {
     }
 
     if(!qso) {
-        Serial.printf("No existing QSO found for %s   cq=%d\n", caller, s.cq);
+        //Serial.printf("No existing QSO found for %s   cq=%d\n", caller, s.cq);
     }
     // -------------------------
     // 2️⃣ Create new QSO if CQ
@@ -86,7 +86,7 @@ void addOrUpdate(const Ft8Spot &s) {
 
         qso = &qso_list.back();
 
-        Serial.printf("CQ seen from %s (%s)\n", q.call1, q.grid1);
+        //Serial.printf("CQ seen from %s (%s)\n", q.call1, q.grid1);
         return;
     }
 
@@ -102,14 +102,14 @@ void addOrUpdate(const Ft8Spot &s) {
     // 4️⃣ Assign call2 if missing and receiver==call1
     // -------------------------
     if (strlen(qso->call2) == 0 && strcmp(receiver,qso->call1) == 0) {
-        Serial.printf("QSO to be updated: call1=%s call2=%s  grid1=%s grid2=%s s.grid=%s\n", 
-            qso->call1, qso->call2, qso->grid1, qso->grid2, s.grid);
+        //Serial.printf("QSO to be updated: call1=%s call2=%s  grid1=%s grid2=%s s.grid=%s\n", 
+        //    qso->call1, qso->call2, qso->grid1, qso->grid2, s.grid);
  
         strcpy(qso->call2, caller);
         if(strlen(qso->grid2) == 0 && strlen(s.grid) > 0) strcpy(qso->grid2, s.grid);
         if(qso->snr2 == 0 && s.snr_db != 0) qso->snr2 = s.snr_db;
-        Serial.printf("QSO updated: call1=%s call2=%s  grid1=%s grid2=%s\n", 
-            qso->call1, qso->call2, qso->grid1, qso->grid2);
+        //Serial.printf("QSO updated: call1=%s call2=%s  grid1=%s grid2=%s\n", 
+        //    qso->call1, qso->call2, qso->grid1, qso->grid2);
     }
 
     // -------------------------
