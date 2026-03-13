@@ -70,7 +70,7 @@ loop():
  └── periodic FT8 frequency optimization
 
 
-### Hardware Requirements
+### 6️⃣ Hardware Requirements
 
 - ESP32 (any ESP32 variant should work)
 - PCM1808 ADC
@@ -79,7 +79,7 @@ loop():
 - MCP23017 for antenna relay switching
 - Tayloe / QSD or other IQ front-end
 
-### Performance Notes
+### 7️⃣ Performance Notes
 
 - Designed for efficient CPU usage on ESP32
 - DSP pipeline supports real-time audio at 8 kHz
