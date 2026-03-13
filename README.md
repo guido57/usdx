@@ -68,6 +68,7 @@ loop():
  ├── antenna filter update
  ├── TX bias control
  └── periodic FT8 frequency optimization
+```
 
 
 ### 6️⃣ Hardware Requirements
