@@ -25,7 +25,6 @@ This project implements a full **IQ SDR receiver** and **FT8 transceiver** on an
 ## Architecture Overview
 
 ### 1️⃣ RF Front-End
-
 - Tayloe / QSD detector for I/Q extraction
 - Connected to **PCM1808 ADC** via I2S
 - Optional analog pre-filtering per HF band
