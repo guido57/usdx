@@ -2,12 +2,17 @@
 
 #define VERSION   "0.01"
 
-// rotary encoder
-#define GPIO_ROT_A     47  // GPIO pin for rotary encoder A
-#define GPIO_ROT_B     21 // GPIO pin for rotary encoder B   
-#define GPIO_ROT_SW    45  // GPIO pin for rotary encoder switch  
+// rotary encoder_freq frequency and step size
+#define GPIO_ROT_A     47  // GPIO pin for rotary encoder_freq A
+#define GPIO_ROT_B     21  // GPIO pin for rotary encoder_freq B   
+#define GPIO_ROT_SW    45  // GPIO pin for rotary encoder_freq switch  
 #define GPIO_L_SW      13  // GPIO pin for left pushbutton switch   
 #define GPIO_R_SW      14  // GPIO pin for right pushbutton switch
+
+// rotary encoder menu parameters
+#define GPIO_ROT_MENU_A   39 // GPIO pin for menu rotary encoder A
+#define GPIO_ROT_MENU_B   38 // GPIO pin for menu rotary encoder B 
+#define GPIO_ROT_MENU_SW  40 // GPIO pin for menu rotary encoder switch
 
 // I2C pins (shared bus for all devices)
 #define I2C_SDA 41
@@ -22,6 +27,10 @@
 #define SI5351_ADDR 0x60
 #endif
 
+#ifndef ANT_FILTERS_ADDR
+#define ANT_FILTERS_ADDR 0x21   // A0=1 A1=0 A2=0
+#endif	
+
 #define CLK2
 
 // Set to 1 to print SI5351 programming details over Serial.
@@ -34,8 +43,16 @@
 #define GPIO_ADC_I 6
 #define GPIO_ADC_Q 7
 
+// -------------------- PCM1808 ADC Pin mapping --------------------
+#define I2S_BCK_PCM1808   12
+#define I2S_DIN_PCM1808   11
+#define I2S_WS_PCM1808    10
+#define I2S_MCLK_PCM1808   9
+
 #define GPIO_PWM_RX_ATT  5  // PWM output for ATT control
 #define GPIO_PWM_TX_BIAS 4  // PWM output for biasing power amplifier
+
+#define GPIO_TX         18  // Switch the relay to TX mode. High=TX Low=RX
 
 // IQ ADC sampling configuration (ESP32)
 // main.ori uses a 62.5kHz timer ISR and alternates I/Q each tick, i.e. ~31.25kS/s per channel.
@@ -135,10 +152,10 @@
 	#define AM_TEST_CARRIER_HZ 1000.0f
 #endif
 #ifndef AM_TEST_MOD_HZ
-	#define AM_TEST_MOD_HZ 1000.0f
+	#define AM_TEST_MOD_HZ 500.0f
 #endif
 #ifndef AM_TEST_DEPTH
-	#define AM_TEST_DEPTH 0.7f
+	#define AM_TEST_DEPTH 0.0f
 #endif
 #ifndef AM_TEST_AMPLITUDE
 	#define AM_TEST_AMPLITUDE 12000.0f
@@ -152,3 +169,4 @@
 
 // Audio sample rate (8kHz for 4kHz bandwidth)
 #define AUDIO_I2S_SAMPLE_RATE 8000
+

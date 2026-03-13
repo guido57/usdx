@@ -64,10 +64,29 @@
   <div class='section tab-section' id='ft8'>
     <h3>FT8 Control</h3>
 
-    <div class='row'>
-        <label>Frequency (Hz):</label>
-        <div class='ctrl'><input type='number' id='ft8-frequency' value='7074000'></div>
+    <div class="row">
+      <label for="ft8-frequency ">Freq (Hz):</label>
+      <select id="ft8-frequency" name="freq" class="spacing-tight">
+        <option value="1840000">1.840 MHz</option>
+          <option value="3573000">3.573 MHz</option>
+          <option value="5357000">5.357 MHz</option>
+          <option value="7074000">7.074 MHz</option>
+          <option value="10136000">10.136 MHz</option>
+          <option value="14074000">14.074 MHz</option>
+          <option value="18100000">18.100 MHz</option>
+          <option value="21074000">21.074 MHz</option>
+          <option value="24915000">24.915 MHz</option>
+          <option value="28074000">28.074 MHz</option>
+      </select>
+
+      <label for="ft8-offset" class="spacing-wide">Offset (Hz):</label>
+      <input type="number" id="ft8-offset" name="offset" value="1500" class="spacing-tight">
     </div>
+
+    <div class="row">
+      <label for="ft8-testmsg" class="spacing-wide">Test message:</label>
+      <input type="text" id="ft8-testmsg" name="testmsg" value="" class="spacing-tight">
+    </div>  
 
     <div class='actions'>
         <button class='btn' id='ft8-start'>Start FT8</button>

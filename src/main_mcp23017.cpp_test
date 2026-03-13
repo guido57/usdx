@@ -1,0 +1,63 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <Wire.h>
+#include <math.h>
+
+#include "configuration.h"
+#include "secrets.h"
+#include "si5351.h"
+#include "ft8_tx.h"
+#include "iq_adc.h"
+#include "pcm1808.h"
+#include "ui.h"
+#include "audio_filter.h"
+#include "audio_i2s.h"
+#include "demodulator.h"
+#include "cic_filter.h"
+#include "cic_filter32.h"
+#include "wifi_config.h"
+#include "rx_att_pwm.h"
+#include "tx_bias_pwm.h"
+#include "ft8_freq_opt.h"
+
+#include "ant_filters.h"
+
+#define MCP23017_ADDR 0x21   // A0=1 A1=0 A2=0
+
+AntennaFilters filters(MCP23017_ADDR);
+
+void setup()
+{
+  Serial.begin(115200);
+  delay(1000);
+
+  Serial.println("ESP32-S3 AntennaFilters test");
+
+  Wire.begin(I2C_SDA, I2C_SCL);
+
+  filters.begin();
+
+  filters.setRx();
+}
+
+void loop()
+{
+  Serial.println("RX-TX set to RX");
+  filters.setRx();
+
+  Serial.println("Set 1.8 3.5 MHz low pass filter");
+  filters.set1_8_3_5();
+  delay(5000);
+
+  Serial.println("Set 5 7 MHz low pass filter");
+  filters.set5_7();
+  delay(5000);
+
+  Serial.println("Set 14 21 28 MHz low pass filter");
+  filters.set14_21_28();
+  delay(5000);
+
+  Serial.println("Bypass all low pass filters");
+  filters.bypassAll();
+  delay(5000);
+}

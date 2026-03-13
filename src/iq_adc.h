@@ -1,6 +1,7 @@
 #ifndef IQ_ADC_H
 #define IQ_ADC_H
 
+#include <Arduino.h>
 #include <stdint.h>
 #include <stddef.h>
 
@@ -44,11 +45,21 @@ struct IqSample {
  */
 void iq_adc_setup();
 
+
+/**
+ * @brief Restarts the ADC hardware, DMA controller, and reader task.
+ * This function can be used to apply new settings without fully reinitializing the system  .
+ */
+void iq_adc_restart(); // Added function declaration for restarting the ADC with new settings
+
 /**
  * @brief Checks if the ADC system is initialized and running.
  * @return true if ready, false otherwise.
  */
 bool iq_adc_ready();
+
+
+esp_err_t iq_adc_error(); 
 
 /**
  * @brief Reads one I/Q pair from the ring buffer.

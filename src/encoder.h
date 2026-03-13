@@ -9,7 +9,7 @@ public:
   
   Encoder();
   
-  // Initialize encoder with pin assignments
+  // Initialize encoder_freq with pin assignments
   void begin(uint8_t rotA, uint8_t rotB, uint8_t rotSW, 
              uint8_t leftSW, uint8_t rightSW);
   

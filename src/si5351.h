@@ -50,6 +50,7 @@ public:
   //volatile uint32_t _mod;
   volatile uint8_t pll_regs[8];
   volatile uint8_t _i2c_error = 0;
+  volatile uint8_t drive_strength = 0; // 0=2mA, 1=4mA, 2=6mA, 3=8mA
 
   inline uint8_t i2cError() const { return _i2c_error; }
   inline void clearI2cError() { _i2c_error = 0; }
@@ -124,7 +125,8 @@ public:
       SendRegister(n+16+8, 0x80|(0x40*_int)); // MSNx PLLn: 0x40=FBA_INT; 0x80=CLKn_PDN
     } else {
       //SendRegister(n+16, ((pll)*0x20)|0x0C|0|(0x40*_int));  // MSx CLKn: 0x0C=PLLA,0x2C=PLLB local msynth; 0=2mA; 0x40=MSx_INT; 0x80=CLKx_PDN
-      SendRegister(n+16, ((pll)*0x20)|0x0C|3|(0x40*_int));  // MSx CLKn: 0x0C=PLLA,0x2C=PLLB local msynth; 3=8mA; 0x40=MSx_INT; 0x80=CLKx_PDN
+      //SendRegister(n+16, ((pll)*0x20)|0x0C|3|(0x40*_int));  // MSx CLKn: 0x0C=PLLA,0x2C=PLLB local msynth; 3=8mA; 0x40=MSx_INT; 0x80=CLKx_PDN
+      SendRegister(n+16, ((pll)*0x20)|0x0C|drive_strength|(0x40*_int));
       SendRegister(n+165, (!_int) * phase * msa / 90);      // when using: make sure to configure MS in fractional-mode, perform reset afterwards
     }
   }
@@ -173,6 +175,88 @@ public:
       //_mod = fvcoa % fxtal;
   }
 
+  void write_ms_registers(uint8_t base_reg, uint32_t a, uint32_t b, uint32_t c) {
+    uint32_t p1 = (uint32_t)(128 * (uint64_t)a + (128 * (uint64_t)b / c) - 512);
+    uint32_t p2 = (uint32_t)(128 * (uint64_t)b - c * (128 * (uint64_t)b / c));
+    uint32_t p3 = c;
+
+    uint8_t data[8];
+    data[0] = (uint8_t)((p3 >> 8) & 0xFF);   // P3[15:8]
+    data[1] = (uint8_t)(p3 & 0xFF);          // P3[7:0]
+    data[2] = (uint8_t)((p1 >> 16) & 0x03);  // P1[17:16]
+    data[3] = (uint8_t)((p1 >> 8) & 0xFF);   // P1[15:8]
+    data[4] = (uint8_t)(p1 & 0xFF);          // P1[7:0]
+    
+    // Register 5: P3[19:16] in High Nibble, P2[19:16] in Low Nibble
+    data[5] = (uint8_t)(((p3 >> 12) & 0xF0) | ((p2 >> 16) & 0x0F));
+    
+    data[6] = (uint8_t)((p2 >> 8) & 0xFF);   // P2[15:8]
+    data[7] = (uint8_t)(p2 & 0xFF);          // P2[7:0]
+
+    Wire.beginTransmission(0x60);
+    Wire.write(base_reg); 
+    Wire.write(data, 8); // Using the burst write for speed
+    Wire.endTransmission();
+  }
+
+
+  void setupPllForTx(uint32_t baseFreq) {
+    
+    // Use your EXISTING working ms function to set the PLL and CLK2 initially
+    // n=-2 is typically PLLB in some libraries, but let's use your freqb logic:
+    
+    uint64_t vco_cached = (uint64_t)fxtal * 32ULL;
+
+    // Set PLLB to 800MHz
+    ms(MSNB, (uint32_t) vco_cached, fxtal); 
+    
+    // Set CLK2 to your starting frequency to initialize all registers (18, 16, etc.)
+    // We do this once so the hardware is "primed"
+    ms(MS2, (uint32_t) vco_cached, (uint32_t)baseFreq, PLLB, 0, 0, 0);
+
+    // Reset PLLB to ensure lock (Register 177)
+    SendRegister(177, 0x80); 
+  }
+
+  // Replace si5351.freqb(f/100) with this inside the 'for' loop
+  void freqb_fast(uint64_t fout_x100) {
+    // 1. Fixed VCO (25MHz * 32 = 800MHz)
+    // const uint64_t vcoa_x100 = 80000000000ULL; 
+    uint64_t vco_cached = (uint64_t)fxtal * 32ULL;
+    uint64_t vcoa_x100 = vco_cached * 100ULL;
+    
+    // 2. Clone the math from your working ms() function
+    // msa = integer part, msb = fractional numerator, msc = denominator
+    uint32_t msa = vcoa_x100 / fout_x100;
+    uint32_t msc = 1048575; // This is your library's _MSC (usually 1048575)
+    uint32_t msb = ((vcoa_x100 % fout_x100) * (uint64_t)msc) / fout_x100;
+
+    // 3. Clone the P-parameter packing
+    uint32_t msp1 = 128 * msa + 128 * msb / msc - 512;
+    uint32_t msp2 = 128 * msb - 128 * msb / msc * msc;
+    uint32_t msp3 = msc;
+
+    // 4. Use your library's macros (BB0, BB1, BB2) to pack the registers
+    // msa == 4 check is included to match your working code
+    uint8_t ms_reg2 = BB2(msp1) | (0 << 4) | ((msa == 4) * 0x0C); 
+    uint8_t ms_regs[8] = { 
+        BB1(msp3), 
+        BB0(msp3), 
+        ms_reg2, 
+        BB1(msp1), 
+        BB0(msp1), 
+        BB2(((msp3 & 0x0F0000) << 4) | msp2), 
+        BB1(msp2), 
+        BB0(msp2) 
+    };
+
+    // 5. Send to MultiSynth 2 (n=2, base register = 2*8+42 = 58)
+    // NOTE: In your code n*8+42. For CLK2, n is 2.
+    SendRegister(2 * 8 + 42, ms_regs, 8); 
+  }
+
+  // This is the original freqb method that calculates PLL parameters from scratch every time, which is too slow for FT8 tone generation
+  // For FT8 use SetupPllForTx() once at the beginning, then use freqb_fast() for microsecond-level updates during the tone generation loop
   void freqb(uint32_t fout){  // Set a CLK2 to fout Hz (on PLLB)
       if (_i2c_error) return;
       uint16_t d = (16 * fxtal) / fout;
@@ -216,6 +300,7 @@ static inline int32_t programSi5351Rx(SI5351& si5351, const Si5351RxSynthState& 
   // - CW : si5351.freq(freq + cw_offset, rx_ph_q, 0)
   // - RIT applied via freq_calc_fast() + SendPLLRegisterBulk()
   
+
   // Use IQ phase from state structure
   const uint16_t rx_ph_q = s.iqPhase;
 

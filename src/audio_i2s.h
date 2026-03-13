@@ -10,6 +10,9 @@
 // Returns true on success
 bool audio_i2s_setup();
 
+// Intialize  the I2S audio task (if using event-driven mode)
+bool audio_i2s_setup_with_dma();
+
 // Write a single audio sample (blocking with timeout)
 // sample: int16_t audio sample (±32767 range)
 // Returns true if written successfully
@@ -29,3 +32,6 @@ void audio_i2s_stop();
 
 // Call this regularly from loop() to keep the audio library running
 void audio_i2s_loop();
+
+// Start the I2S audio task (if using event-driven mode)
+esp_err_t audio_i2s_start_task();

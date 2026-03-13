@@ -21,6 +21,8 @@ struct UiSettings {
 	uint8_t vfomode1;
 	int32_t vfoA;
 	int32_t vfoB;
+	int32_t ft8_offset;
+	char ft8_testmsg[64];
 	int32_t bandval;
 	int16_t rit;
 	uint8_t ritActive;
@@ -30,6 +32,7 @@ struct UiSettings {
 	int8_t nr;
 	int8_t att;
 	int8_t att_rf;
+	int8_t tx_bias;
 	int8_t smode;
 	int8_t cw_tone;
 	int16_t cw_offset;
@@ -75,6 +78,7 @@ int32_t ui_get_sifxtal();
 
 int8_t ui_get_att();
 int8_t ui_get_att_rf();
+int8_t ui_get_tx_bias();
 
 // Audio-related UI settings
 int8_t ui_get_filter();

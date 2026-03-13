@@ -1,30 +1,38 @@
 #include <Arduino.h>
+#include <WiFi.h>
 #include <Wire.h>
 #include <math.h>
 
 #include "configuration.h"
+#include "secrets.h"
 #include "si5351.h"
 #include "ft8_tx.h"
 #include "iq_adc.h"
+#include "pcm1808.h"
 #include "ui.h"
 #include "audio_filter.h"
 #include "audio_i2s.h"
 #include "demodulator.h"
 #include "cic_filter.h"
+#include "cic_filter32.h"
 #include "wifi_config.h"
 #include "rx_att_pwm.h"
-
-// PSRAM init functions for manual initialization after I2S
-extern "C" {
-  esp_err_t esp_psram_init(void);
-  size_t esp_psram_get_size(void);
-}
+#include "tx_bias_pwm.h"
+#include "ft8_freq_opt.h"
+#include "ant_filters.h"
 
 static SI5351 si5351;
-//FT8_TX ft8tx(si5351);
+FT8_TX ft8tx(si5351);
+FT8FreqOptimizer ft8FreqOptimizer;
+
+PCM1808 * pcm1808;
+AntennaFilters *antFilters;
 
 static bool synthInitialized = false;
 static Si5351RxSynthState lastSynth = { 0, 0, SI5351_RX_MODE_LSB, 0, false, 700 };
+
+bool transmitting = false;
+uint8_t audioVolume = 0; // Start with volume at 0 until we read the UI setting in the loop
 
 // Convert UiMode to DemodMode
 static DemodMode ui_mode_to_demod_mode(UiMode mode) {
@@ -37,14 +45,442 @@ static DemodMode ui_mode_to_demod_mode(UiMode mode) {
   }
 }
 
-// Audio processing with CIC decimation, Hilbert transform and LSB/USB/CW/AM/FM demodulation
+// ===============================
+// SDR Voice AGC
+// ===============================
+
+static float agcGain      = 1.0f;
+static float agcEnvelope  = 0.0f;
+
+#define AGC_TARGET        9000.0f   // target peak level
+#define AGC_ATTACK_TC     0.005f     // 5 ms
+#define AGC_RELEASE_TC    0.300f     // 300 ms
+#define AGC_SAMPLE_RATE   8000.0f    // audio rate
+
+// Precomputed coefficients
+static const float agcAttackCoef  = expf(-1.0f / (AGC_ATTACK_TC  * AGC_SAMPLE_RATE));
+static const float agcReleaseCoef = expf(-1.0f / (AGC_RELEASE_TC * AGC_SAMPLE_RATE));
+
+int16_t applyAGC(int16_t in)
+{
+    if (ui_get_agc() != 1)
+        return in;   // AGC disabled
+
+    float x = (float)in;
+    float absx = fabsf(x);
+
+    // ===== Envelope detector =====
+    if (absx > agcEnvelope)
+        agcEnvelope = agcAttackCoef * agcEnvelope + (1.0f - agcAttackCoef) * absx;
+    else
+        agcEnvelope = agcReleaseCoef * agcEnvelope + (1.0f - agcReleaseCoef) * absx;
+
+    // ===== Gain computation =====
+    if (agcEnvelope > 1.0f)
+        agcGain = AGC_TARGET / agcEnvelope;
+    else
+        agcGain = 1.0f;
+
+    // Limit maximum gain (avoid noise explosion)
+    if (agcGain > 20.0f)
+        agcGain = 20.0f;
+
+    float y = x * agcGain;
+
+    // ===== Soft clip safety =====
+    if (y > 32767.0f)  y = 32767.0f;
+    if (y < -32768.0f) y = -32768.0f;
+
+    return (int16_t)y;
+}
+
+// ===== DEBUG PEAK METERS =====
+#define PEAK_ALERT_LEVEL   28000   // near clipping (~-1.4 dBFS)
+#define PEAK_WARN_LEVEL    16000   // high level (~-3 dBFS)
+
+static int16_t peakIDec = 0;
+static int16_t peakQDec = 0;
+static int16_t peakAudio = 0;
+static int16_t peakWebAudio = 0;
+static int16_t peakAudioOut = 0;
+
+static uint32_t peakLastMs = 0;
+
+static inline int16_t fastAbs16(int16_t v) {
+  return v < 0 ? -v : v;
+}
+
+inline bool peakAlert(int16_t v) {
+  return fastAbs16(v) >= PEAK_ALERT_LEVEL;
+}
+
+inline bool peakWarn(int16_t v) {
+  return fastAbs16(v) >= PEAK_WARN_LEVEL;
+}
+
+static void processAudioPCM1808() {
+
+  static CicFilter32 cic;
+  static int32_t i_dc = 0;
+  static int32_t q_dc = 0;
+
+  // --- Timing Debug Variables ---
+  static uint32_t rawSampleCount = 0;
+  static uint32_t lastReportMs = 0;
+
+  uint32_t si5351_now = millis();
+
+  // Process all samples currently waiting
+  while (pcm1808->iq_adc_ready() && pcm1808->iq_adc_available() > 0) {
+
+    IQSample32 sample32;
+    pcm1808->getNextSample(sample32);
+
+    // ADC scaling (prevent overflow in CIC)
+    sample32.I >>= 4;
+    sample32.Q >>= 4;
+
+    rawSampleCount++;
+
+    // Feed CIC
+    if (cic.processSample(sample32.I, sample32.Q)) {
+
+      // CIC decimation output (8 kHz)
+      int16_t iDecimated = (int16_t)(cic.getOutputI() >> 7);
+      int16_t qDecimated = (int16_t)(cic.getOutputQ() >> 7);
+
+      UiMode uiMode = ui_get_mode();
+      DemodMode demodMode = ui_mode_to_demod_mode(uiMode);
+
+      // DC removal (not for AM)
+      if (demodMode != DEMOD_AM) {
+        i_dc += (((int32_t)iDecimated << 8) - i_dc) >> 8;
+        q_dc += (((int32_t)qDecimated << 8) - q_dc) >> 8;
+        iDecimated -= (i_dc >> 8);
+        qDecimated -= (q_dc >> 8);
+      }
+
+      // ===== PEAK IQ =====
+      int16_t absI = fastAbs16(iDecimated);
+      int16_t absQ = fastAbs16(qDecimated);
+      if (absI > peakIDec) peakIDec = absI;
+      if (absQ > peakQDec) peakQDec = absQ;
+
+      // Demodulation
+      int16_t audioSample = demod_process(iDecimated, qDecimated, demodMode);
+
+      // =========== AGC (if enabled) ===========
+      // apply AGC if enabled in UI (AGC should be applied before volume control and peak measurement)
+      audioSample = applyAGC(audioSample);
+
+      // ===== PEAK AUDIO DEMOD =====
+      int16_t absAudio = fastAbs16(audioSample);
+      if (absAudio > peakAudio) peakAudio = absAudio;
+
+      // ===== WEBSOCKET STREAM =====
+      int32_t webAudio = audioSample;
+
+      int16_t webAbs = abs(webAudio) > 32767 ? 32767 : abs(webAudio);
+      if (webAbs > peakWebAudio) peakWebAudio = webAbs;
+
+      wifi_config_audio_push(lastSynth.vfoHz, webAudio);
+
+      // ===== VOLUME CONTROL =====
+      int32_t loudAudio = (int32_t)audioSample * audioVolume /5; // scale volume (0-10) to 0.0-2.0 range
+
+      // limiter
+      if (loudAudio > 32767) loudAudio = 32767;
+      if (loudAudio < -32768) loudAudio = -32768;
+
+      int16_t out16 = (int16_t)loudAudio;
+
+      // ===== PEAK AUDIO OUTPUT =====
+      int16_t absOut = fastAbs16(out16);
+      if (absOut > peakAudioOut) peakAudioOut = absOut;
+
+      // I2S output
+      audio_i2s_write_sample(out16);
+    }
+
+    // --- Sample rate report ---
+    if (si5351_now - lastReportMs >= 1000) {
+
+      float elapsedSec = (si5351_now - lastReportMs) / 1000.0f;
+      float rate = rawSampleCount / elapsedSec;
+
+      // Serial.printf("[ADC] Raw: %.1f Hz | Audio: %.1f Hz\n",
+      //               rate, rate / 4.0f);
+
+      rawSampleCount = 0;
+      lastReportMs = si5351_now;
+    }
+
+    // --- Peak report ---
+    if (si5351_now - peakLastMs >= 1000) {
+
+      bool alert =
+          peakAlert(peakIDec) ||
+          peakAlert(peakQDec) ||
+          peakAlert(peakAudio) ||
+          peakAlert(peakWebAudio) ||
+          peakAlert(peakAudioOut);
+
+      bool warn =
+          peakWarn(peakIDec) ||
+          peakWarn(peakQDec) ||
+          peakWarn(peakAudio) ||
+          peakWarn(peakWebAudio) ||
+          peakWarn(peakAudioOut);
+
+     // if (alert || warn) {
+
+        Serial.printf(
+          "[PEAK %s] IQ I=%5d Q=%5d | Aud=%5d | WS=%5d | OUT=%5d\n",
+          alert ? "alert" : "warning",
+          peakIDec,
+          peakQDec,
+          peakAudio,
+          peakWebAudio,
+          peakAudioOut
+        );
+     // }
+
+      peakIDec = peakQDec = peakAudio = peakWebAudio = peakAudioOut = 0;
+      peakLastMs = si5351_now;
+    }
+  }
+}
+
+#include <math.h> // for sinf, cosf
+
+
+#define AUDIO_BUFFER_SIZE 2048
+static int16_t audioBuffer[AUDIO_BUFFER_SIZE];
+static volatile uint16_t writeIndex = 0;
+static volatile uint16_t readIndex  = 0;
+static int16_t dmaBlock[64];  // preallocate once
+
+static inline uint16_t bufferCount() {
+    if (writeIndex >= readIndex) {
+        return writeIndex - readIndex;
+    } else {
+        return AUDIO_BUFFER_SIZE - (readIndex - writeIndex);
+    }
+}
+
+static void processAudioToneOnlyBuffered() {
+    static float phase = 0.0f;
+    const float fs = 8000.0f;
+    const float fSignal = 1000.0f;
+    const float twoPi = 6.28318530718f;
+    const float phaseInc = twoPi * fSignal / fs;
+
+    // --- 1️⃣ Fill ring buffer (max 32 samples per call to avoid blocking) ---
+    const int MAX_SAMPLES_PER_CALL = 128;
+    int samplesGenerated = 0;
+
+    // Serial.printf("Buffer fill: writeIndex=%d readIndex=%d\n", writeIndex, readIndex);
+    while (bufferCount() < AUDIO_BUFFER_SIZE - 256 && samplesGenerated < MAX_SAMPLES_PER_CALL){    
+        
+        int32_t sample = (int32_t)(cosf(phase) * 1023.0f * audioVolume);
+
+        phase += phaseInc;
+        if (phase >= twoPi) phase -= twoPi;
+
+        if (sample > 32767) sample = 32767;
+        if (sample < -32768) sample = -32768;
+
+        int16_t loud = (int16_t)sample;
+        
+        audioBuffer[writeIndex] = loud;
+        writeIndex = (writeIndex + 1) % AUDIO_BUFFER_SIZE;
+
+        samplesGenerated++;
+    }
+
+    // --- 2️⃣ Feed I2S DMA in blocks if enough samples ---
+    const int dmaBlockSize = sizeof(dmaBlock) / sizeof(dmaBlock[0]);
+    //Serial.printf("DMA write: writeIndex=%d readIndex=%d\n", writeIndex, readIndex);
+    
+    if (bufferCount() >= dmaBlockSize) {
+
+      for (int i = 0; i < dmaBlockSize; i++) {
+          dmaBlock[i] = audioBuffer[readIndex];
+          readIndex = (readIndex + 1) % AUDIO_BUFFER_SIZE;
+      }
+
+      size_t bytesWritten = 0;
+      esp_err_t err = i2s_write(I2S_NUM_1,
+                                dmaBlock,
+                                dmaBlockSize * sizeof(int16_t),
+                                &bytesWritten,
+                                portMAX_DELAY);
+
+      if (err != ESP_OK) {
+          Serial.printf("i2s_write err=%d\n", err);
+      }
+      if(bytesWritten != dmaBlockSize * sizeof(int16_t)) {
+          Serial.printf("i2s_write incomplete: %d bytes written\n", bytesWritten);
+      } 
+    }
+}
+
+static void processAudioPCM1808_simulatedIQ() {
+    static CicFilter32 cic;
+    static int32_t i_dc = 0;
+    static int32_t q_dc = 0;
+
+    // --- Timing Debug Variables ---
+    static uint32_t rawSampleCount = 0;
+    static uint32_t lastReportMs = 0;
+    static uint32_t lastCallMs = 0;
+    uint32_t si5351_now = millis();
+    uint32_t deltaMs = si5351_now - lastCallMs;
+    lastCallMs = si5351_now;
+
+    // --- Simulation variables ---
+    static float phase = 0.0f;
+    const float fs = 32000.0f;     // nominal ADC sampling rate
+    const float fSignal = 1000.0f; // 1 kHz test tone
+    const float twoPi = 6.283185307179586f;
+
+    // Calculate how many samples we need to generate based on elapsed time
+    int samplesToGenerate = (int)((deltaMs / 1000.0f) * fs);
+    if (samplesToGenerate < 1) samplesToGenerate = 1; // generate at least 1 sample
+
+    for (int n = 0; n < samplesToGenerate; n++) {
+        // Generate IQ sinusoid: I = cos(ωt), Q = sin(ωt)
+        int32_t iSample = (int32_t)(cosf(phase) * 32767.0f);
+        int32_t qSample = (int32_t)(sinf(phase) * 32767.0f);
+
+        // Increment phase based on nominal sample rate
+        phase += twoPi * fSignal / fs;
+        if (phase >= twoPi) phase -= twoPi;
+
+        rawSampleCount++;
+
+        // Feed the sample into the CIC filter
+        if (cic.processSample(iSample, qSample)) {
+            int16_t iDecimated = (int16_t)(cic.getOutputI() >> 7);
+            int16_t qDecimated = (int16_t)(cic.getOutputQ() >> 7);
+
+            UiMode uiMode = ui_get_mode();
+            DemodMode demodMode = ui_mode_to_demod_mode(uiMode);
+
+            if (demodMode != DEMOD_AM) {
+                i_dc += (((int32_t)iDecimated << 8) - i_dc) >> 8;
+                q_dc += (((int32_t)qDecimated << 8) - q_dc) >> 8;
+                iDecimated -= (i_dc >> 8);
+                qDecimated -= (q_dc >> 8);
+            }
+
+            int16_t audioSample = demod_process(iDecimated, qDecimated, demodMode);
+
+            wifi_config_audio_push(lastSynth.vfoHz, 16 * audioSample);
+
+            int32_t loudAudio = (int32_t)audioSample * audioVolume;
+            if (loudAudio > 32767) loudAudio = 32767;
+            if (loudAudio < -32768) loudAudio = -32768;
+
+            audio_i2s_write_sample((int16_t)loudAudio);
+        }
+    }
+
+    // --- Periodic Sample Rate Print ---
+    if (si5351_now - lastReportMs >= 1000) {
+        float elapsedSec = (si5351_now - lastReportMs) / 1000.0f;
+        float rate = rawSampleCount / elapsedSec;
+
+        Serial.printf("[Sim IQ Stats] Raw Rate: %.1f Hz | Target: 32000 Hz | Audio Rate: %.1f Hz\n",
+                      rate, rate / 4.0f);
+
+        rawSampleCount = 0;
+        lastReportMs = si5351_now;
+    }
+}
+
 static void processAudioTest() {
+  static CicFilter32 cic;
+  static int32_t i_dc = 0;
+  static int32_t q_dc = 0;
+
+  // --- Timing Debug Variables ---
+  static uint32_t rawSampleCount = 0;
+  static uint32_t lastReportMs = 0;
+  uint32_t si5351_now = millis();
+
+  // 1. Process all samples currently waiting in the ADC buffer
+  while (iq_adc_ready() && iq_adc_available() > 0) {
+    IqSample sample = iq_adc_read_iq();
+    rawSampleCount++; // Count every raw 32kHz IQ pair
+    // 2. Feed the raw ADC samples into the CIC filter
+    if (cic.processSample(sample.i, sample.q)) {
+      
+      // 3. Extract decimated samples (8kHz)
+      // Note: We use >> 6 for CIC gain correction. 
+      // If the volume is too low, we can change this to >> 2 or >> 0 later.
+      int16_t iDecimated = (int16_t)(cic.getOutputI() >> 7);
+      int16_t qDecimated = (int16_t)(cic.getOutputQ() >> 7);
+
+      UiMode uiMode = ui_get_mode();
+      DemodMode demodMode = ui_mode_to_demod_mode(uiMode);
+
+      // 4. DC Removal (Crucial for real hardware to prevent 'hum' or 'thump')
+      if (demodMode != DEMOD_AM) {
+        i_dc += (((int32_t)iDecimated << 8) - i_dc) >> 8;
+        q_dc += (((int32_t)qDecimated << 8) - q_dc) >> 8;
+        iDecimated = iDecimated - (i_dc >> 8);
+        qDecimated = qDecimated - (q_dc >> 8);
+      }
+
+      // 5. Apply your working Demodulator
+      int16_t audioSample = demod_process(iDecimated, qDecimated, demodMode);
+
+      // Send to websocket audio stream before volume scaling
+      wifi_config_audio_push(lastSynth.vfoHz, 16 * audioSample); // amplify 16x also
+
+      // 6. Volume Control
+      int32_t loudAudio = (int32_t)audioSample; 
+      loudAudio = (loudAudio * audioVolume) ;
+
+      // Limit/Clip to prevent I2S crackling
+      if (loudAudio > 32767) loudAudio = 32767;
+      if (loudAudio < -32768) loudAudio = -32768;
+
+      // 7. Output to I2S
+      audio_i2s_write_sample((int16_t)loudAudio);
+    }
+
+      // --- Periodic Sample Rate Print ---
+    if (si5351_now - lastReportMs >= 1000) {
+      // Calculate rate based on actual elapsed time for accuracy
+      float elapsedSec = (si5351_now - lastReportMs) / 1000.0f;
+      float rate = rawSampleCount / elapsedSec;
+      
+      // Serial.printf("[ADC Stats] Raw Rate: %.1f Hz | Target: 32000 Hz | Audio Rate: %.1f Hz\n", 
+      //               rate, rate / 4.0f);
+      
+      rawSampleCount = 0;
+      lastReportMs = si5351_now;
+    }
+  }
+}
+
+// Audio processing with CIC decimation, Hilbert transform and LSB/USB/CW/AM/FM demodulation
+static void processAudioTest_ori() {
   static CicFilter cic;
   static uint32_t audioSampleCount = 0;
   static uint32_t iqPairCount = 0;
   static uint32_t lastAudioDebugMs = 0;
   static int16_t lastAudioSample = 0;  // For interpolation
   
+  static uint32_t lastTestBlockMs = 0;
+  // Only generate a new block every 4ms (to match 32kHz rate)
+  if (millis() - lastTestBlockMs < 4) {
+    return; // Exit early, it's not time for new data yet
+  }
+  lastTestBlockMs = millis();
+
   // DC removal state for I and Q channels
   static int32_t i_dc = 0;
   static int32_t q_dc = 0;
@@ -55,115 +491,150 @@ static void processAudioTest() {
   static float test_mod_phase = 0.0f;
   const float car_step = 2.0f * (float)M_PI * AM_TEST_CARRIER_HZ / 32000.0f;
   const float mod_step = 2.0f * (float)M_PI * AM_TEST_MOD_HZ / 32000.0f;
+
+  // static uint32_t lastTestBlockMs = 0;
+  // // Only generate a new block every 4ms (to match 32kHz rate)
+  // if (millis() - lastTestBlockMs < 4) {
+  //   return; // Exit early, it's not time for new data yet
+  // }
+  // lastTestBlockMs = millis();
+
+  // for (uint16_t n = 0; n < 128; ++n) {
+  //   const float env = 1.0f + AM_TEST_DEPTH * sinf(test_mod_phase);
+  //   const float i_f = env * sinf(test_car_phase) * AM_TEST_AMPLITUDE;
+  //   const float q_f = env * cosf(test_car_phase) * AM_TEST_AMPLITUDE;
+  //   IqSample sample = { (int16_t)i_f, (int16_t)q_f };
+  //   test_car_phase += car_step;
+  //   test_mod_phase += mod_step;
+  //   if (test_car_phase > 2.0f * (float)M_PI) test_car_phase -= 2.0f * (float)M_PI;
+  //   if (test_mod_phase > 2.0f * (float)M_PI) test_mod_phase -= 2.0f * (float)M_PI;
+  //   iqPairCount++;
+
   for (uint16_t n = 0; n < 128; ++n) {
-    const float env = 1.0f + AM_TEST_DEPTH * sinf(test_mod_phase);
-    const float i_f = env * cosf(test_car_phase) * AM_TEST_AMPLITUDE;
-    const float q_f = env * sinf(test_car_phase) * AM_TEST_AMPLITUDE;
-    IqSample sample = { (int16_t)i_f, (int16_t)q_f };
+    // 1. Generate clean floating point samples
+    float i_f = cosf(test_car_phase) * AM_TEST_AMPLITUDE;
+    float q_f = sinf(test_car_phase) * AM_TEST_AMPLITUDE; // Use SIN for Q
+    
+    // 2. Increment phase
     test_car_phase += car_step;
-    test_mod_phase += mod_step;
     if (test_car_phase > 2.0f * (float)M_PI) test_car_phase -= 2.0f * (float)M_PI;
-    if (test_mod_phase > 2.0f * (float)M_PI) test_mod_phase -= 2.0f * (float)M_PI;
-    iqPairCount++;
+
+    // 3. IMMEDIATELY pass into CIC (do not store in a local variable first)
+    //if (cic.processSample((int16_t)i_f, (int16_t)q_f)) {
+        // int16_t iDec = (int16_t)(cic.getOutputI() >> 6);
+        // int16_t qDec = (int16_t)(cic.getOutputQ() >> 6);
+        
+        // 4. Bypass DC removal and Phase Correction for this test
+        
+     
+
+        int16_t audio = demod_process((int16_t)i_f,(int16_t) q_f, DEMOD_LSB);
+        
+        // Write directly to I2S
+        audio_i2s_write_sample(audio);
+    
+
+    IqSample sample = { (int16_t)0, (int16_t)0 };
+  //  
 #else
   while (iq_adc_ready() && iq_adc_available() > 0) {
     IqSample sample = iq_adc_read_iq();
     iqPairCount++;
 #endif
 
-    // Waterfall capture at 32kHz IQ (128-point FFT -> 128 bins across 32kHz)
-    // Throttle updates to reduce CPU load.
-    static int16_t wf_i[128];
-    static int16_t wf_q[128];
-    static uint8_t wf_idx = 0;
-    static uint8_t wf_skip = 0;
-    wf_i[wf_idx] = sample.i;
-    wf_q[wf_idx] = sample.q;
-    wf_idx++;
-    if (wf_idx >= 128) {
-      wf_idx = 0;
-      wf_skip = (uint8_t)((wf_skip + 1) & 0x1F); // update every 32 blocks
-      if (wf_skip == 0) {
-        static bool fft_init = false;
-        static float tw_re[64];
-        static float tw_im[64];
-        if (!fft_init) {
-          for (uint16_t k = 0; k < 64; ++k) {
-            const float ang = -2.0f * (float)M_PI * (float)k / 128.0f;
-            tw_re[k] = cosf(ang);
-            tw_im[k] = sinf(ang);
-          }
-          fft_init = true;
-        }
+    // // Waterfall capture at 32kHz IQ (128-point FFT -> 128 bins across 32kHz)
+    // // Throttle updates to reduce CPU load.
+    // static int16_t wf_i[128];
+    // static int16_t wf_q[128];
+    // static uint8_t wf_idx = 0;
+    // static uint8_t wf_skip = 0;
+    // wf_i[wf_idx] = sample.i;
+    // wf_q[wf_idx] = sample.q;
+    // wf_idx++;
+    // if (wf_idx >= 128) {
+    //   wf_idx = 0;
+    //   wf_skip = (uint8_t)((wf_skip + 1) & 0x1F); // update every 32 blocks
+    //   if (wf_skip == 0) {
+    //     static bool fft_init = false;
+    //     static float tw_re[64];
+    //     static float tw_im[64];
+    //     if (!fft_init) {
+    //       for (uint16_t k = 0; k < 64; ++k) {
+    //         const float ang = -2.0f * (float)M_PI * (float)k / 128.0f;
+    //         tw_re[k] = cosf(ang);
+    //         tw_im[k] = sinf(ang);
+    //       }
+    //       fft_init = true;
+    //     }
 
-        float re[128];
-        float im[128];
-        for (uint16_t n = 0; n < 128; ++n) {
-          re[n] = (float)wf_i[n];
-          im[n] = (float)wf_q[n];
-        }
+    //     float re[128];
+    //     float im[128];
+    //     for (uint16_t n = 0; n < 128; ++n) {
+    //       re[n] = (float)wf_i[n];
+    //       im[n] = (float)wf_q[n];
+    //     }
 
-        // bit reversal
-        for (uint16_t i = 0; i < 128; ++i) {
-          uint8_t x = (uint8_t)i;
-          x = (uint8_t)(((x & 0x55u) << 1) | ((x & 0xAAu) >> 1));
-          x = (uint8_t)(((x & 0x33u) << 2) | ((x & 0xCCu) >> 2));
-          x = (uint8_t)(((x & 0x0Fu) << 4) | ((x & 0xF0u) >> 4));
-          uint8_t j = (uint8_t)(x >> 1); // 7-bit reversal
-          if (j > i) {
-            float tr = re[i]; re[i] = re[j]; re[j] = tr;
-            float ti = im[i]; im[i] = im[j]; im[j] = ti;
-          }
-        }
+    //     // bit reversal
+    //     for (uint16_t i = 0; i < 128; ++i) {
+    //       uint8_t x = (uint8_t)i;
+    //       x = (uint8_t)(((x & 0x55u) << 1) | ((x & 0xAAu) >> 1));
+    //       x = (uint8_t)(((x & 0x33u) << 2) | ((x & 0xCCu) >> 2));
+    //       x = (uint8_t)(((x & 0x0Fu) << 4) | ((x & 0xF0u) >> 4));
+    //       uint8_t j = (uint8_t)(x >> 1); // 7-bit reversal
+    //       if (j > i) {
+    //         float tr = re[i]; re[i] = re[j]; re[j] = tr;
+    //         float ti = im[i]; im[i] = im[j]; im[j] = ti;
+    //       }
+    //     }
 
-        // radix-2 FFT
-        for (uint16_t m = 2; m <= 128; m <<= 1) {
-          const uint16_t half = m >> 1;
-          const uint16_t step = 128 / m;
-          for (uint16_t k = 0; k < 128; k += m) {
-            for (uint16_t j = 0; j < half; ++j) {
-              const uint16_t tw = j * step;
-              const float wr = tw_re[tw];
-              const float wi = tw_im[tw];
-              const uint16_t idx = k + j + half;
-              const float tr = wr * re[idx] - wi * im[idx];
-              const float ti = wr * im[idx] + wi * re[idx];
-              const float ur = re[k + j];
-              const float ui = im[k + j];
-              re[k + j] = ur + tr;
-              im[k + j] = ui + ti;
-              re[idx] = ur - tr;
-              im[idx] = ui - ti;
-            }
-          }
-        }
+    //     // radix-2 FFT
+    //     for (uint16_t m = 2; m <= 128; m <<= 1) {
+    //       const uint16_t half = m >> 1;
+    //       const uint16_t step = 128 / m;
+    //       for (uint16_t k = 0; k < 128; k += m) {
+    //         for (uint16_t j = 0; j < half; ++j) {
+    //           const uint16_t tw = j * step;
+    //           const float wr = tw_re[tw];
+    //           const float wi = tw_im[tw];
+    //           const uint16_t idx = k + j + half;
+    //           const float tr = wr * re[idx] - wi * im[idx];
+    //           const float ti = wr * im[idx] + wi * re[idx];
+    //           const float ur = re[k + j];
+    //           const float ui = im[k + j];
+    //           re[k + j] = ur + tr;
+    //           im[k + j] = ui + ti;
+    //           re[idx] = ur - tr;
+    //           im[idx] = ui - ti;
+    //         }
+    //       }
+    //     }
 
-        float maxMag = 1.0f;
-        float mags[128];
-        for (uint16_t k = 0; k < 128; ++k) {
-          const float mag = re[k] * re[k] + im[k] * im[k];
-          mags[k] = mag;
-          if (mag > maxMag) maxMag = mag;
-        }
+    //     float maxMag = 1.0f;
+    //     float mags[128];
+    //     for (uint16_t k = 0; k < 128; ++k) {
+    //       const float mag = re[k] * re[k] + im[k] * im[k];
+    //       mags[k] = mag;
+    //       if (mag > maxMag) maxMag = mag;
+    //     }
 
-        uint8_t bins[128];
-        for (uint16_t x = 0; x < 128; ++x) {
-          const uint16_t bin = (x + 64) & 127; // fftshift
-          float v = mags[bin] / maxMag;
-          if (v < 1e-6f) v = 1e-6f;
-          if (v > 1.0f) v = 1.0f;
-          // Log scaling (compress dynamic range) with tunable floor
-          float vdb = log10f(v) + 6.0f; // maps 1e-6..1 -> 0..6
-          float norm = vdb / 6.0f;
-          float thresh = ui_get_wf_thresh() / 100.0f;
-          if (norm < thresh) norm = 0.0f;
-          uint8_t level = (uint8_t)(norm * 15.0f + 0.5f);
-          if (level > 15) level = 15;
-          bins[x] = level;
-        }
-        ui_set_waterfall_line(bins, 128);
-      }
-    }
+    //     uint8_t bins[128];
+    //     for (uint16_t x = 0; x < 128; ++x) {
+    //       const uint16_t bin = (x + 64) & 127; // fftshift
+    //       float v = mags[bin] / maxMag;
+    //       if (v < 1e-6f) v = 1e-6f;
+    //       if (v > 1.0f) v = 1.0f;
+    //       // Log scaling (compress dynamic range) with tunable floor
+    //       float vdb = log10f(v) + 6.0f; // maps 1e-6..1 -> 0..6
+    //       float norm = vdb / 6.0f;
+    //       float thresh = ui_get_wf_thresh() / 100.0f;
+    //       if (norm < thresh) norm = 0.0f;
+    //       uint8_t level = (uint8_t)(norm * 15.0f + 0.5f);
+    //       if (level > 15) level = 15;
+    //       bins[x] = level;
+    //     }
+    //     ui_set_waterfall_line(bins, 128);
+    //   }
+    // }
     
     // Apply CIC decimating filter (decimation by 4: 32kHz → 8kHz)
     if (cic.processSample(sample.i, sample.q)) {
@@ -367,7 +838,7 @@ static void processAudioTest() {
     #if AM_TEST_MODE
       int8_t filt = 0;
       int8_t cw_tone = 0;
-      int8_t volume = 5;
+      int8_t volume = ui_get_volume();
     #else
       int8_t filt = ui_get_filter();
       int8_t cw_tone = ui_get_cw_tone();
@@ -448,9 +919,9 @@ static void processAudioTest() {
       if (audioSample < -32768) audioSample = -32768;
       
       // Output at 8kHz (4kHz bandwidth)
-      if (audio_i2s_write_sample(audioSample)) {
-        audioSampleCount++;
-      }
+      // if (audio_i2s_write_sample(audioSample)) {
+      //   audioSampleCount++;
+      // }
       
     }
 #if AM_TEST_MODE
@@ -460,6 +931,123 @@ static void processAudioTest() {
 #endif
 }
 
+
+// void setup_ori() {
+
+//   Serial.begin(115200); 
+//   delay(1000); 
+
+//   // Test PSRAM availability
+//   Serial.printf("\n=== Memory Status ===\n");
+//   Serial.printf("Total heap: %u bytes\n", ESP.getHeapSize());
+//   Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
+//   Serial.printf("PSRAM size: %u bytes\n", ESP.getPsramSize());
+//   Serial.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());
+  
+//   if (ESP.getPsramSize() > 0) {
+//     Serial.printf("PSRAM is available!\n");
+//     // Try to allocate in PSRAM
+//     void* psram_test = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM);
+//     if (psram_test) {
+//       Serial.printf("PSRAM allocation test: SUCCESS\n");
+//       heap_caps_free(psram_test);
+//     } else {
+//       Serial.printf("PSRAM allocation test: FAILED\n");
+//     }
+//   } else {
+//     Serial.printf("PSRAM is NOT available\n");
+//   }
+//   Serial.printf("=====================\n\n");
+
+//   // Serial.printf("Initialize shared I2C bus once (OLED + SI5351 use the same Wire instance).\r\n");
+//   Wire.begin(I2C_SDA, I2C_SCL);
+//   Wire.setTimeOut(20);
+//   Wire.setClock(200000);
+
+//   // Load persisted UI settings before programming the synth
+//   ui_load_settings();
+  
+//   Serial.printf("Apply initial SI5351 programming based on UI state at startup.\r\n");
+//   const UiMode uiModeNow = ui_get_mode();
+//   Si5351RxSynthState si5351_now = {
+//     (uint32_t)ui_get_sifxtal(),
+//     ui_get_vfo_freq(),
+//     ui_mode_to_si5351_rx_mode(uiModeNow),
+//     ui_get_rit(),
+//     ui_get_rit_active(),
+//     ui_get_cw_offset(),
+//     ui_get_iq_phase(),
+//   };
+  
+//   Serial.printf("Initialize UI.\r\n");
+//   ui_setup();
+
+//   delay(500);
+
+//   si5351.fxtal = si5351_now.fxtalHz;
+//   si5351.powerDown();
+
+//   const int32_t programmedHz = programSi5351Rx(si5351, si5351_now);
+//   if (si5351.i2cError() != 0) {
+//     Serial.printf("SI5351 I2C error during programming: %u. Synth disabled.\n", si5351.i2cError());
+//     synthInitialized = false;
+//     return;
+//   }else {
+//     Serial.printf("SI5351 programmed successfully.\n");
+//     synthInitialized = true;
+//   }
+//   lastSynth = si5351_now;
+
+//   Serial.printf("Initialize demodulator (Hilbert transform).\r\n");
+//   demod_init();
+
+//   delay(500);
+//   Serial.printf("Initialize IQ ADC (pins + attenuation).\r\n");
+//   iq_adc_setup();
+//   iq_adc_set_att_level((uint8_t)ui_get_att());
+
+//   //set the resolution to 12 bits (0-4096)
+//   analogReadResolution(12);
+
+//   Serial.printf("Initialize I2S audio output (MAX98357).\r\n");
+//   if (audio_i2s_setup()) {
+//     Serial.printf("I2S audio initialized successfully.\r\n");
+//     delay(500);
+//   } else {
+//     Serial.printf("Failed to initialize I2S audio!\r\n");
+//   }
+
+//   // Initialize RX attenuation PWM control
+//   rxAttPwmInit();
+//   setRxAttFromUi(30); // Set initial attenuation to minumum (3V out)
+//   // Initialize TX bias PWM control
+//   txBiasPwmInit();
+//   setTxBiasFromUi(0); // Set initial TX bias to minimum (0V out)
+  
+//   iq_adc_set_att_level(0); // ADC attenuation always 0 dB
+
+//   audioVolume = ui_get_volume(); // Initialize audio volume from UI setting
+
+//   delay(5000); // Wait for everything to stabilize before starting WiFi (especially important if PSRAM is present)
+//   // Start WiFi config (STA if credentials are valid, AP fallback if not)
+//   wifi_config_setup();
+
+//   ft8tx.begin(7075000); // Set FT8 TX base frequency to 7075 kHz
+  
+// }
+
+void setup_minimal() {
+
+  Serial.begin(115200); 
+  delay(1000); 
+
+  
+  wifi_config_setup();
+
+}
+
+
+bool static setup_done = false;
 void setup() {
 
   Serial.begin(115200); 
@@ -487,20 +1075,19 @@ void setup() {
   }
   Serial.printf("=====================\n\n");
 
+  if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare Wire !!!\n");
+  
   Serial.printf("Initialize shared I2C bus once (OLED + SI5351 use the same Wire instance).\r\n");
-  Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.begin(I2C_SDA, I2C_SCL,50000);
   Wire.setTimeOut(20);
-  Wire.setClock(400000);
-
-  // Load persisted UI settings before programming the synth
+  delay(10);
+    
+  // // Load persisted UI settings before programming the synth
   ui_load_settings();
-
-  // Start WiFi config (STA if credentials are valid, AP fallback if not)
-  wifi_config_setup();
-
-  Serial.printf("Apply initial SI5351 programming based on UI state at startup.\r\n");
+  
+  // Serial.printf("Apply initial SI5351 programming based on UI state at startup.\r\n");
   const UiMode uiModeNow = ui_get_mode();
-  Si5351RxSynthState now = {
+  Si5351RxSynthState si5351_now = {
     (uint32_t)ui_get_sifxtal(),
     ui_get_vfo_freq(),
     ui_mode_to_si5351_rx_mode(uiModeNow),
@@ -509,10 +1096,20 @@ void setup() {
     ui_get_cw_offset(),
     ui_get_iq_phase(),
   };
-  si5351.fxtal = now.fxtalHz;
+  
+  if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare UI !!!\n");
+  
+  Serial.printf("Initialize UI.\r\n");
+  ui_setup();
+
+  delay(500);
+
+  if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare SI5351 !!!\n");
+  
+  si5351.fxtal = si5351_now.fxtalHz;
   si5351.powerDown();
 
-  const int32_t programmedHz = programSi5351Rx(si5351, now);
+  const int32_t programmedHz = programSi5351Rx(si5351, si5351_now);
   if (si5351.i2cError() != 0) {
     Serial.printf("SI5351 I2C error during programming: %u. Synth disabled.\n", si5351.i2cError());
     synthInitialized = false;
@@ -521,46 +1118,121 @@ void setup() {
     Serial.printf("SI5351 programmed successfully.\n");
     synthInitialized = true;
   }
-  lastSynth = now;
-
-  Serial.printf("Initialize UI.\r\n");
-  ui_setup();
+  lastSynth = si5351_now;
 
   Serial.printf("Initialize demodulator (Hilbert transform).\r\n");
   demod_init();
 
-  Serial.printf("Initialize IQ ADC (pins + attenuation).\r\n");
-  iq_adc_setup();
-  iq_adc_set_att_level((uint8_t)ui_get_att());
+  // Start WiFi stack before ADC (this sequence was previously stable)
+  if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di chiamare wifi_config_setup() !!!\n");
+  ft8tx.begin(7075000); // Set FT8 TX base frequency to 7075 kHz
+  wifi_config_setup();
+  // delay(10000); // let WiFi task initialize before enabling ADC DMA
 
-  //set the resolution to 12 bits (0-4096)
-  analogReadResolution(12);
+  delay(500);
+  // Serial.printf("Initialize IQ ADC (pins + attenuation).\r\n");
+  // iq_adc_setup();
+  // //set the resolution to 12 bits (0-4096)
+  // analogReadResolution(12);
+ 
+  Serial.printf("Initialize IQ ADC PCM1808 at a 96KHz sampling rate\r\n");
+  pcm1808 = new PCM1808(I2S_BCK_PCM1808, I2S_DIN_PCM1808, I2S_WS_PCM1808, I2S_MCLK_PCM1808, 32000);
+  bool pcm1808Initialized = pcm1808->begin();
+  if (!pcm1808Initialized) {
+    Serial.printf("Failed to initialize PCM1808!\r\n");
+    return;
+  }
 
   Serial.printf("Initialize I2S audio output (MAX98357).\r\n");
   if (audio_i2s_setup()) {
     Serial.printf("I2S audio initialized successfully.\r\n");
+    delay(500);
   } else {
     Serial.printf("Failed to initialize I2S audio!\r\n");
   }
 
+
+  // if (audio_i2s_setup_with_dma()) {
+  //   Serial.printf("I2S audio initialized successfully.\r\n");
+  //   delay(500);
+  // } else {
+  //   Serial.printf("Failed to initialize I2S audio!\r\n");
+  // }
+  
+  antFilters = new AntennaFilters( ANT_FILTERS_ADDR); // the actual I2C address of your MCP23017
+  antFilters->begin();
+  antFilters->bypassAll(); // Start with all filters bypassed
+
   // Initialize RX attenuation PWM control
   rxAttPwmInit();
-  setRxAttFromUi(0); // Set initial attenuation to maximum 0
+  setRxAttFromUi(30); // Set initial attenuation to minumum (3V out)
+  // Initialize TX bias PWM control
+  txBiasPwmInit();
+  setTxBiasFromUi(0); // Set initial TX bias to minimum (0V out)
+  
+  //iq_adc_set_att_level(0); // ADC attenuation always 0 dB
+
+  audioVolume = ui_get_volume(); // Initialize audio volume from UI setting
+  
+  setup_done = true;
+
 }
+
+
 
 void loop() {
 
-  uint32_t t0, dt;
+  static uint32_t lastReport = 0;
+  static uint32_t loopCount = 0;
+
+  // timing accumulators
+  static uint32_t uiTimeTotal = 0;
+  static uint32_t audioTimeTotal = 0;
+  static uint32_t cycles = 0;
+
+  loopCount++;
+
+  uint32_t now_report = millis();
+
+  if (now_report - lastReport >= 1000) {   // every 1 second
+
+    float uiAvg = cycles ? uiTimeTotal / (float)cycles : 0;
+    float audioAvg = cycles ? audioTimeTotal / (float)cycles : 0;
+
+    Serial.printf(
+      "Loop: %lu Hz | ui_loop(): %.2f us | processAudioToneOnly(): %.2f us WiFi status=%d\n",
+      loopCount, uiAvg, audioAvg, WiFi.status());
+
+    loopCount = 0;
+    uiTimeTotal = 0;
+    audioTimeTotal = 0;
+    cycles = 0;
+    lastReport = now_report;
+  }
+
+  if(!setup_done) {
+    delay(100);
+    return;
+  }
+
+  uint32_t start;
 
   // ---------------- UI ----------------
+  start = micros();
   ui_loop();
+  uiTimeTotal += micros() - start;
 
   // ------------- Audio ---------------
-  processAudioTest();
+  start = micros();
+  processAudioPCM1808();
+  // processAudioPCM1808_simulatedIQ();
+  audioTimeTotal += micros() - start;
+
+  cycles++;
 
   // ----------- Synth control ----------
   const UiMode uiModeNow = ui_get_mode();
-  Si5351RxSynthState now = {
+  Si5351RxSynthState si5351_now = {
     (uint32_t)ui_get_sifxtal(),
     ui_get_vfo_freq(),
     ui_mode_to_si5351_rx_mode(uiModeNow),
@@ -570,28 +1242,38 @@ void loop() {
     ui_get_iq_phase(),
   };
 
-  if (synthStateChanged(now, lastSynth)) {
-    si5351.fxtal = now.fxtalHz;
-    programSi5351Rx(si5351, now);
-    lastSynth = now;
+  if (synthStateChanged(si5351_now, lastSynth)) {
+    si5351.fxtal = si5351_now.fxtalHz;
+    programSi5351Rx(si5351, si5351_now);
+
+    // set the right antenna filter
+    if(lastSynth.vfoHz != si5351_now.vfoHz) {
+      antFilters->setFilter(si5351_now.vfoHz);
+      Serial.printf("Antenna filter updated for frequency %u Hz\n", si5351_now.vfoHz);
+    } 
+
+    lastSynth = si5351_now;
+    printf("SI5351 reprogrammed due to UI change. freq=%u\n", si5351_now.vfoHz);  
   }
 
-  // ------------- ADC ATT --------------
-  // iq_adc_set_att_level((uint8_t)ui_get_att());
-  iq_adc_set_att_level(0); // ADC attenuation always 0 dB
-  setRxAttFromUi((uint8_t)ui_get_att_rf()); // Set RF attenuation from UI
+  // setRxAttFromUi((uint8_t)ui_get_att_rf());
 
-    // Example trigger from serial
-  // if (Serial.available()) {
-  //     Serial.read();
+  // Set TX bias from UI
+  if(transmitting) {  
+    setTxBiasFromUi((uint8_t)ui_get_tx_bias()); 
+  } else {
+    setTxBiasFromUi(TX_BIAS_FOR_RX);
+  }  
 
-  //     if (ft8tx.requestTransmission("IW5ALZ K1ABC JN89"))
-  //         Serial.println("FT8 scheduled for next slot");
-  //     else
-  //         Serial.println("TX busy or encode error");
-  // }
+  if(!transmitting) {
+    // Set audio volume from UI
+    audioVolume = ui_get_volume();
+  }
 
-  // Your DSP / ADC processing can block here safely
-  //delay(200);
-   
+  static uint32_t lastStatusMs = 0;
+  if (millis() - lastStatusMs > 15000) {
+    lastStatusMs = millis();
+    uint16_t bestFreqOffset =
+        ft8FreqOptimizer.best_freq(7074000, false, false);
+  }
 }

@@ -249,20 +249,12 @@ static void handleApiWifiSave() {
 // Start FT8 decoding
 static void handleFt8Start() {
     ft8_running = true;
-    JsonDocument doc;
-    deserializeJson(doc, server.arg("plain"));
-    int freq = doc["freq"] | 0;
-    String msg = doc["msg"] | "";
-
-    ft8tx.startContinuousTransmission(freq, msg.c_str()); // Example: start continuous transmission of a test message on 40m
     server.send(200, "application/json", "{\"message\":\"Started\"}");
 }
 
 // Stop FT8 decoding
 static void handleFt8Stop() {
     ft8_running = false;
-    ft8tx.stopContinuousTransmission();
-
     server.send(200, "application/json", "{\"message\":\"Stopped\"}");
 }
 
@@ -274,7 +266,7 @@ static void handleFt8Send() {
     String msg = doc["msg"] | "";
 
     if (ft8tx.requestTransmission(freq, msg.c_str()))
-        Serial.println("FT8 scheduled for next slot: " + msg);
+        Serial.println("FT8 scheduled for next slot");
     else
         Serial.println("TX busy or encode error");
 
@@ -363,70 +355,70 @@ static void startServer() {
 
 static void addFt8SpotFromJson(const char* json)
 {
-    // JsonDocument doc;
-    // DeserializationError err = deserializeJson(doc, json);
-    // if (err) {
-    //     Serial.println("[FT8] JSON parse error");
-    //     return;
-    // }
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, json);
+    if (err) {
+        Serial.println("[FT8] JSON parse error");
+        return;
+    }
 
-    // //Serial.printf("json=%s locator=%s\n", json, (const char*)doc["locator"] );
-    // ft8FreqOptimizer.store(json); // feed the FT8 frequency optimizer with the new spot data
+    //Serial.printf("json=%s locator=%s\n", json, (const char*)doc["locator"] );
+    ft8FreqOptimizer.store(json); // feed the FT8 frequency optimizer with the new spot data
 
-    // Ft8Spot spot{};   // zero-initialize safely
+    Ft8Spot spot{};   // zero-initialize safely
 
-    // strlcpy(spot.receiver_callsign,
-    //         doc["receiver_callsign"] | "",
-    //         sizeof(spot.receiver_callsign));
+    strlcpy(spot.receiver_callsign,
+            doc["receiver_callsign"] | "",
+            sizeof(spot.receiver_callsign));
     
-    // strlcpy(spot.decoded_line,
-    //         doc["decoded_line"] | "",
-    //         sizeof(spot.decoded_line));
+    strlcpy(spot.decoded_line,
+            doc["decoded_line"] | "",
+            sizeof(spot.decoded_line));
 
-    // strlcpy(spot.receiver_grid,
-    //         doc["receiver_grid"] | "",
-    //         sizeof(spot.receiver_grid));
+    strlcpy(spot.receiver_grid,
+            doc["receiver_grid"] | "",
+            sizeof(spot.receiver_grid));
 
-    // strlcpy(spot.decoding_software,
-    //         doc["decoding_software"] | "",
-    //         sizeof(spot.decoding_software));
+    strlcpy(spot.decoding_software,
+            doc["decoding_software"] | "",
+            sizeof(spot.decoding_software));
 
-    // strlcpy(spot.antenna_description,
-    //         doc["antenna_description"] | "",
-    //         sizeof(spot.antenna_description));
+    strlcpy(spot.antenna_description,
+            doc["antenna_description"] | "",
+            sizeof(spot.antenna_description));
 
-    // strlcpy(spot.callsign,
-    //         doc["callsign"] | "",
-    //         sizeof(spot.callsign));
+    strlcpy(spot.callsign,
+            doc["callsign"] | "",
+            sizeof(spot.callsign));
 
-    // strlcpy(spot.grid,
-    //         doc["locator"] | "",
-    //         sizeof(spot.grid));
+    strlcpy(spot.grid,
+            doc["locator"] | "",
+            sizeof(spot.grid));
 
-    // strlcpy(spot.report,
-    //         doc["report"] | "",
-    //         sizeof(spot.report));
+    strlcpy(spot.report,
+            doc["report"] | "",
+            sizeof(spot.report));
 
-    // strlcpy(spot.mode,
-    //         doc["mode"] | "FT8",
-    //         sizeof(spot.mode));
+    strlcpy(spot.mode,
+            doc["mode"] | "FT8",
+            sizeof(spot.mode));
 
-    // spot.freq_hz  = doc["frequency_hz"] | 0;
-    // spot.snr_db   = doc["snr_db"] | 0;
-    // spot.timestamp = doc["timestamp"] | (utc_ms()/1000);
+    spot.freq_hz  = doc["frequency_hz"] | 0;
+    spot.snr_db   = doc["snr_db"] | 0;
+    spot.timestamp = doc["timestamp"] | (utc_ms()/1000);
 
-    // // Derived fields
-    // spot.cq = doc["cq"] | false;
-    // spot.directed_to_me = false; // you can add logic later
+    // Derived fields
+    spot.cq = doc["cq"] | false;
+    spot.directed_to_me = false; // you can add logic later
 
-    // // ---- Store safely ----
-    // ft8_spots.push_back(spot);
+    // ---- Store safely ----
+    ft8_spots.push_back(spot);
 
-    // // Keep memory bounded (VERY important)
-    // if (ft8_spots.size() > 50)
-    //     ft8_spots.erase(ft8_spots.begin());
+    // Keep memory bounded (VERY important)
+    if (ft8_spots.size() > 50)
+        ft8_spots.erase(ft8_spots.begin());
 
-    // qsoManager.addOrUpdate(spot);
+    qsoManager.addOrUpdate(spot);
 
 }
 
@@ -445,7 +437,7 @@ uint8_t wifiBarsFromRSSI(int rssi)
 // ======== Main Network Task ========
 // ======== Network Task (Core 0) ========
 
-void NetworkTask_simple_working(void* pvParameters) {
+void NetworkTask(void* pvParameters) {
 
     Serial.println("[WiFi] Network task started on Core 0");
     staStartMs = millis();
@@ -458,14 +450,8 @@ void NetworkTask_simple_working(void* pvParameters) {
     // ASPETTA che la UI sia completamente inizializzata e il bus I2C sia calmo
     vTaskDelay(2000 / portTICK_PERIOD_MS); 
 
-    // Connect to WiFi (avoid aggressive stop/start loops)
-    WiFi.useStaticBuffers(true);
-    WiFi.persistent(false);
-    WiFi.mode(WIFI_STA);
-    WiFi.setMinSecurity(WIFI_AUTH_WPA2_PSK);
-    WiFi.setAutoReconnect(true);
-    WiFi.begin(SECRET_SSID, SECRET_PASS, 0);
-    esp_wifi_set_ps(WIFI_PS_NONE);
+    // Connect to WiFi
+    if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di WiFi.begin !!!\n");
             
 
     // Main network loop
@@ -488,26 +474,23 @@ void NetworkTask_simple_working(void* pvParameters) {
 
         // ---- WiFi reconnecting ----
         if (WiFi.status() != WL_CONNECTED &&
-            millis() - lastReconnectMs > 15000) {
+            millis() - lastReconnectMs > 10000) {
             lastReconnectMs = millis();
+            
+            ets_printf("[WiFi] Pre-reconnect heap check...\n");
+            // Se questo fallisce, l'heap era già rotto PRIMA di WiFi.begin
+            if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di WiFi.begin !!!\n");
 
             ets_printf("[WiFi] Reconnecting...\r\n");
-            wl_status_t st = WiFi.status();
-            if (st == WL_NO_SSID_AVAIL || st == WL_CONNECT_FAILED || st == WL_DISCONNECTED) {
-                WiFi.setMinSecurity(WIFI_AUTH_WPA2_PSK);
-                WiFi.begin(SECRET_SSID, SECRET_PASS, 0);
-                esp_wifi_set_ps(WIFI_PS_NONE);
-            } else {
-                WiFi.reconnect();
-                esp_wifi_set_ps(WIFI_PS_NONE);
-            }
+            WiFi.disconnect(true);
+            vTaskDelay(500); // short delay before reconnecting
+            // WiFi.begin(SECRET_SSID, SECRET_PASS,0, targetBssid);
+            WiFi.begin(SECRET_SSID, SECRET_PASS,0);
             staConnecting = true;
             staStartMs = millis();
         }
 
         if(WiFi.status() == WL_CONNECTED && staConnecting) {
-            WiFi.setSleep(false);
-            esp_wifi_set_ps(WIFI_PS_NONE);
             ets_printf("[WiFi] Connected, IP=%s\n", WiFi.localIP().toString().c_str());
             setup_time_once();
             // Start HTTP server
@@ -522,7 +505,7 @@ void NetworkTask_simple_working(void* pvParameters) {
 
 
 
-void NetworkTask(void* pvParameters) {
+void NetworkTask_ori(void* pvParameters) {
 
     Serial.println("[WiFi] Network task started on Core 0");
     staStartMs = millis();
@@ -538,18 +521,18 @@ void NetworkTask(void* pvParameters) {
     // Connect to WiFi
     if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di WiFi.begin !!!\n");
             
-    Serial.printf("[WiFi] Connecting to SSID: %s\n", SECRET_SSID);
-    WiFi.begin(SECRET_SSID, SECRET_PASS);
+    // Serial.printf("[WiFi] Connecting to SSID: %s\n", SECRET_SSID);
+    // WiFi.begin(SECRET_SSID, SECRET_PASS);
     //WiFi.begin(SECRET_SSID, SECRET_PASS,0, targetBssid);
     //WiFi.begin("Pixel10", "pippo123");
     //forceConnect();
     // Wait for WiFi STA connection
-    while(WiFi.status() != WL_CONNECTED) {
-        vTaskDelay(500);
-        Serial.print(".");
-    }
-    Serial.printf("[WiFi] Connected, IP=%s\n", WiFi.localIP().toString().c_str());
-    setup_time_once();
+    // while(WiFi.status() != WL_CONNECTED) {
+    //     vTaskDelay(500);
+    //     Serial.print(".");
+    // }
+    // Serial.printf("[WiFi] Connected, IP=%s\n", WiFi.localIP().toString().c_str());
+    // setup_time_once();
 
     // Start HTTP server
     // startServer();
@@ -586,15 +569,11 @@ void NetworkTask(void* pvParameters) {
             vTaskDelay(500); // short delay before reconnecting
             // WiFi.begin(SECRET_SSID, SECRET_PASS,0, targetBssid);
             WiFi.begin(SECRET_SSID, SECRET_PASS,0);
-            esp_wifi_set_ps(WIFI_PS_NONE);
             staConnecting = true;
             staStartMs = millis();
         }
 
-        // Start server once connected
         if(WiFi.status() == WL_CONNECTED && staConnecting) {
-            WiFi.setSleep(false);
-            esp_wifi_set_ps(WIFI_PS_NONE);
             ets_printf("[WiFi] Connected, IP=%s\n", WiFi.localIP().toString().c_str());
             setup_time_once();
             // Start HTTP server
@@ -626,7 +605,7 @@ void NetworkTask(void* pvParameters) {
 
               size_t samplesToCopy = min((uint16_t)framePtr->n_samples, (uint16_t)WS_AUDIO_BUF_SAMPLES);
               memcpy(packet+16, framePtr->samples, samplesToCopy * 2);
-              // Serial.printf("[Audio] Sending frame with %d samples at %d Hz\n", framePtr->n_samples, framePtr->freq_hz);      
+
               ws.sendBIN(packet, 16 + samplesToCopy * 2);
           }
           // Return frame to free pool
@@ -682,6 +661,13 @@ void NetworkTask(void* pvParameters) {
 // ===== Public Setup/Loop =====
 
 void wifi_config_setup() {
+   
+    Serial.printf("[WiFi] Start network task on Core 0\n");
+    xTaskCreatePinnedToCore(NetworkTask, "NET", 24000, NULL, 1, NULL, 0); 
+}
+
+
+void wifi_config_setup_ori() {
     if (!LittleFS.begin(true)) Serial.println("[FS] LittleFS mount failed");
     loadCredentials();
 
@@ -696,7 +682,7 @@ void wifi_config_setup() {
         }
     }
 
-    if(ft8Queue == NULL) ft8Queue = xQueueCreate(8,  MAX_FT8_MSG);
+    if(ft8Queue == NULL) ft8Queue       = xQueueCreate(8,  MAX_FT8_MSG);
 
     Serial.printf("[WiFi] Start network task on Core 0\n");
     xTaskCreatePinnedToCore(NetworkTask, "NET", 24000, NULL, 1, NULL, 0); 
@@ -724,7 +710,7 @@ void wifi_config_audio_push(int32_t freq_hz, int16_t sample)
     
     if (idx >= WS_AUDIO_BUF_SAMPLES) {
         // frame is full, add header info
-        //ets_printf("[Audio] Frame ready with %d samples at %d Hz\n", frame->n_samples, frame->freq_hz); 
+        ets_printf("[Audio] Frame ready with %d samples at %d Hz\n", frame->n_samples, frame->freq_hz); 
         frame->ts_ms     = utc_ms();
         frame->freq_hz   = freq_hz;
         frame->n_samples = WS_AUDIO_BUF_SAMPLES;
