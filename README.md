@@ -1,5 +1,7 @@
 This software is derived from https://github.com/threeme3/usdx but it has been completely rewritten for ESP32-S3 N16R8 Devkit C1.
 
+Its hardware is here https://hackaday.io/project/205224-esp32-hf-qrp-ft8-transceiver
+
 # ESP32 SDR Receiver / FT8 Transceiver
 
 This project implements a full **IQ SDR receiver** and **FT8 transceiver** on an ESP32 using external RF front-end circuitry. It includes DSP processing, audio output via I2S, network audio streaming, and automatic antenna band filtering.  
