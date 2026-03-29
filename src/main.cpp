@@ -234,15 +234,15 @@ static void processAudioPCM1808() {
 
      // if (alert || warn) {
 
-        Serial.printf(
-          "[PEAK %s] IQ I=%5d Q=%5d | Aud=%5d | WS=%5d | OUT=%5d\n",
-          alert ? "alert" : "warning",
-          peakIDec,
-          peakQDec,
-          peakAudio,
-          peakWebAudio,
-          peakAudioOut
-        );
+        // Serial.printf(
+        //   "[PEAK %s] IQ I=%5d Q=%5d | Aud=%5d | WS=%5d | OUT=%5d\n",
+        //   alert ? "alert" : "warning",
+        //   peakIDec,
+        //   peakQDec,
+        //   peakAudio,
+        //   peakWebAudio,
+        //   peakAudioOut
+        // );
      // }
 
       peakIDec = peakQDec = peakAudio = peakWebAudio = peakAudioOut = 0;
@@ -1077,8 +1077,8 @@ void setup() {
 
   if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare Wire !!!\n");
   
-  Serial.printf("Initialize shared I2C bus once (OLED + SI5351 use the same Wire instance).\r\n");
-  Wire.begin(I2C_SDA, I2C_SCL,50000);
+  Serial.printf("Initialize shared I2C bus once (OLED + SI5351 + MCP23017 use the same Wire instance).\r\n");
+  Wire.begin(I2C_SDA, I2C_SCL,1000000U);
   Wire.setTimeOut(20);
   delay(10);
     
@@ -1199,9 +1199,9 @@ void loop() {
     float uiAvg = cycles ? uiTimeTotal / (float)cycles : 0;
     float audioAvg = cycles ? audioTimeTotal / (float)cycles : 0;
 
-    Serial.printf(
-      "Loop: %lu Hz | ui_loop(): %.2f us | processAudioToneOnly(): %.2f us WiFi status=%d\n",
-      loopCount, uiAvg, audioAvg, WiFi.status());
+    // Serial.printf(
+    //   "Loop: %lu Hz | ui_loop(): %.2f us | processAudioToneOnly(): %.2f us WiFi status=%d\n",
+    //   loopCount, uiAvg, audioAvg, WiFi.status());
 
     loopCount = 0;
     uiTimeTotal = 0;
@@ -1258,12 +1258,12 @@ void loop() {
 
   // setRxAttFromUi((uint8_t)ui_get_att_rf());
 
-  // Set TX bias from UI
-  if(transmitting) {  
-    setTxBiasFromUi((uint8_t)ui_get_tx_bias()); 
-  } else {
-    setTxBiasFromUi(TX_BIAS_FOR_RX);
-  }  
+  // // Set TX bias from UI
+  // if(transmitting) {  
+  //   setTxBiasFromUi((uint8_t)ui_get_tx_bias()); 
+  // } else {
+  //   setTxBiasFromUi(TX_BIAS_FOR_RX);
+  // }  
 
   if(!transmitting) {
     // Set audio volume from UI

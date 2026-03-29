@@ -363,70 +363,70 @@ static void startServer() {
 
 static void addFt8SpotFromJson(const char* json)
 {
-    // JsonDocument doc;
-    // DeserializationError err = deserializeJson(doc, json);
-    // if (err) {
-    //     Serial.println("[FT8] JSON parse error");
-    //     return;
-    // }
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, json);
+    if (err) {
+        Serial.println("[FT8] JSON parse error");
+        return;
+    }
 
-    // //Serial.printf("json=%s locator=%s\n", json, (const char*)doc["locator"] );
-    // ft8FreqOptimizer.store(json); // feed the FT8 frequency optimizer with the new spot data
+    //Serial.printf("json=%s locator=%s\n", json, (const char*)doc["locator"] );
+    ft8FreqOptimizer.store(json); // feed the FT8 frequency optimizer with the new spot data
 
-    // Ft8Spot spot{};   // zero-initialize safely
+    Ft8Spot spot{};   // zero-initialize safely
 
-    // strlcpy(spot.receiver_callsign,
-    //         doc["receiver_callsign"] | "",
-    //         sizeof(spot.receiver_callsign));
+    strlcpy(spot.receiver_callsign,
+            doc["receiver_callsign"] | "",
+            sizeof(spot.receiver_callsign));
     
-    // strlcpy(spot.decoded_line,
-    //         doc["decoded_line"] | "",
-    //         sizeof(spot.decoded_line));
+    strlcpy(spot.decoded_line,
+            doc["decoded_line"] | "",
+            sizeof(spot.decoded_line));
 
-    // strlcpy(spot.receiver_grid,
-    //         doc["receiver_grid"] | "",
-    //         sizeof(spot.receiver_grid));
+    strlcpy(spot.receiver_grid,
+            doc["receiver_grid"] | "",
+            sizeof(spot.receiver_grid));
 
-    // strlcpy(spot.decoding_software,
-    //         doc["decoding_software"] | "",
-    //         sizeof(spot.decoding_software));
+    strlcpy(spot.decoding_software,
+            doc["decoding_software"] | "",
+            sizeof(spot.decoding_software));
 
-    // strlcpy(spot.antenna_description,
-    //         doc["antenna_description"] | "",
-    //         sizeof(spot.antenna_description));
+    strlcpy(spot.antenna_description,
+            doc["antenna_description"] | "",
+            sizeof(spot.antenna_description));
 
-    // strlcpy(spot.callsign,
-    //         doc["callsign"] | "",
-    //         sizeof(spot.callsign));
+    strlcpy(spot.callsign,
+            doc["callsign"] | "",
+            sizeof(spot.callsign));
 
-    // strlcpy(spot.grid,
-    //         doc["locator"] | "",
-    //         sizeof(spot.grid));
+    strlcpy(spot.grid,
+            doc["locator"] | "",
+            sizeof(spot.grid));
 
-    // strlcpy(spot.report,
-    //         doc["report"] | "",
-    //         sizeof(spot.report));
+    strlcpy(spot.report,
+            doc["report"] | "",
+            sizeof(spot.report));
 
-    // strlcpy(spot.mode,
-    //         doc["mode"] | "FT8",
-    //         sizeof(spot.mode));
+    strlcpy(spot.mode,
+            doc["mode"] | "FT8",
+            sizeof(spot.mode));
 
-    // spot.freq_hz  = doc["frequency_hz"] | 0;
-    // spot.snr_db   = doc["snr_db"] | 0;
-    // spot.timestamp = doc["timestamp"] | (utc_ms()/1000);
+    spot.freq_hz  = doc["frequency_hz"] | 0;
+    spot.snr_db   = doc["snr_db"] | 0;
+    spot.timestamp = doc["timestamp"] | (utc_ms()/1000);
 
-    // // Derived fields
-    // spot.cq = doc["cq"] | false;
-    // spot.directed_to_me = false; // you can add logic later
+    // Derived fields
+    spot.cq = doc["cq"] | false;
+    spot.directed_to_me = false; // you can add logic later
 
-    // // ---- Store safely ----
-    // ft8_spots.push_back(spot);
+    // ---- Store safely ----
+    ft8_spots.push_back(spot);
 
-    // // Keep memory bounded (VERY important)
-    // if (ft8_spots.size() > 50)
-    //     ft8_spots.erase(ft8_spots.begin());
+    // Keep memory bounded (VERY important)
+    if (ft8_spots.size() > 50)
+        ft8_spots.erase(ft8_spots.begin());
 
-    // qsoManager.addOrUpdate(spot);
+    qsoManager.addOrUpdate(spot);
 
 }
 

@@ -1,4 +1,4 @@
-// ft8_freq_optimizer.h
+// ft8_freq_opt.h
 #pragma once
 #include <stdint.h>
 
