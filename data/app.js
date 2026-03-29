@@ -176,7 +176,7 @@ ft8Freq?.addEventListener('change', (e) => {
     }
     syncAndSave(e.target, 'bandval');
     // also sync the main VFO frequency
-    syncAndSave(document.querySelector(`input[name="vfoA"]`),'bandval')
+    // syncAndSave(document.querySelector(`input[name="vfoA"]`),'bandval')
     
 });
 

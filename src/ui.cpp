@@ -241,6 +241,7 @@ void ui_apply_settings(const UiSettings& s) {
   ft8_offset = constrain(s.ft8_offset, 0, 3000);
   strlcpy(ft8_testmsg, s.ft8_testmsg, sizeof(ft8_testmsg));
   bandval = constrain(s.bandval, 0, (int32_t)N_BANDS - 1);
+  Serial.printf("Applying settings: vfoA=%u, vfoB=%u, vfoSel=%u, mode=%u, bandval=%u\n", s.vfoA, s.vfoB, s.vfoSel, s.mode, s.bandval);
   rit = constrain(s.rit, (int16_t)-9999, (int16_t)9999);
   ritActive = (s.ritActive != 0);
   volume = constrain(s.volume, (int8_t)0, (int8_t)10);
@@ -289,6 +290,7 @@ static void saveSettings() {
   s.ft8_offset = ft8_offset;
   strlcpy(s.ft8_testmsg, ft8_testmsg, sizeof(s.ft8_testmsg));
   s.bandval = bandval;
+  Serial.printf("Saving settings: vfoA=%u, vfoB=%u, vfoSel=%u, mode=%u, bandval=%u\n", s.vfoA, s.vfoB, s.vfoSel, s.mode, s.bandval);
   s.rit = rit;
   s.ritActive = ritActive ? 1 : 0;
   s.volume = volume;
