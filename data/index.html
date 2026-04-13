@@ -61,63 +61,81 @@
   </div>
 
   <!-- FT8 Control -->
-  <div class='section tab-section' id='ft8'>
-    <h3>FT8 Control</h3>
+<div class='section tab-section' id='ft8'>
+  <h3>FT8 Control</h3>
 
-    <div class="row">
-      <label for="ft8-frequency ">Freq (Hz):</label>
-      <select id="ft8-frequency" name="freq" class="spacing-tight">
-        <option value="1840000">1.840 MHz</option>
-          <option value="3573000">3.573 MHz</option>
-          <option value="5357000">5.357 MHz</option>
-          <option value="7074000">7.074 MHz</option>
-          <option value="10136000">10.136 MHz</option>
-          <option value="14074000">14.074 MHz</option>
-          <option value="18100000">18.100 MHz</option>
-          <option value="21074000">21.074 MHz</option>
-          <option value="24915000">24.915 MHz</option>
-          <option value="28074000">28.074 MHz</option>
-      </select>
+  <!-- HEADER STATUS -->
+  <div class="ft8-header">
+    <div><strong>Dial:</strong> <span id="ft8-dial">14.074 MHz</span></div>
+    <div><strong>Offset:</strong> <span id="ft8-offset-read">1500 Hz</span></div>
+    <div><strong>TX Slot:</strong> <span id="ft8-slot">EVEN (0/30)</span></div>
+    <div><strong>State:</strong> <span id="ft8-state">IDLE</span></div>
+    <div><strong>Next TX:</strong> <span id="ft8-nexttx">--:--</span></div>
+  </div>
 
-      <label for="ft8-offset" class="spacing-wide">Offset (Hz):</label>
-      <input type="number" id="ft8-offset" name="offset" value="1500" class="spacing-tight">
-    </div>
+  <!-- CONFIG -->
+  <div class="row">
+    <label>Freq (Hz):</label>
+    <select id="ft8-frequency" name="freq" class="spacing-tight">
+      <option value="1840000">1.840 MHz</option>
+      <option value="3573000">3.573 MHz</option>
+      <option value="5357000">5.357 MHz</option>
+      <option value="7074000">7.074 MHz</option>
+      <option value="10136000">10.136 MHz</option>
+      <option value="14074000">14.074 MHz</option>
+      <option value="18100000">18.100 MHz</option>
+      <option value="21074000">21.074 MHz</option>
+      <option value="24915000">24.915 MHz</option>
+      <option value="28074000">28.074 MHz</option>
+    </select>
 
-    <div class="row">
-      <label for="ft8-testmsg" class="spacing-wide">Test message:</label>
-      <input type="text" id="ft8-testmsg" name="testmsg" value="" class="spacing-tight">
-    </div>  
+    <label class="spacing-wide">Offset (Hz):</label>
+    <input type="number" id="ft8-offset" name="offset" value="1500" class="spacing-tight">
+  </div>
 
-    <div class='actions'>
-        <button class='btn' id='ft8-start'>Start FT8</button>
-        <button class='btn secondary' id='ft8-stop'>Stop FT8</button>
-        <button class='btn' id='ft8-send-test'>Send Test</button>
-        <span id='ft8-status' class='badge'>Idle</span>
-    </div>
+  <div class="row">
+    <label>Test message:</label>
+    <input type="text" id="ft8-testmsg" name="testmsg">
+  </div>
 
-    <div style="display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap;">
+  <!-- ACTIONS -->
+  <div class='actions'>
+    <button class='btn' id='ft8-start'>Start FT8</button>
+    <button class='btn secondary' id='ft8-stop'>Stop FT8</button>
+    <button class='btn' id='ft8-send-test'>Send Test</button>
+    <span id='ft8-status' class='badge'>Idle</span>
+  </div>
 
-    <!-- LEFT: SPOTS -->
-    <div style="flex:1; min-width:420px;">
-        <h4>Decoded Spots</h4>
-        <table id='ft8-spots'>
+  <!-- MAIN PANELS -->
+  <div class="ft8-panels">
+
+    <!-- SPOTS -->
+    <div class="panel" style="display:none;">
+      <h4>Decoded Spots</h4>
+      <table id='ft8-spots'>
         <thead>
-            <tr>
-            <th>Time</th><th>Call</th><th>Grid</th>
-            <th>To-call</th><th>To-grid</th>
-            <th>Freq</th><th>Report</th><th>Action</th>
-            </tr>
+          <tr>
+            <th>Time</th>
+            <th>Slot</th>
+            <th>Callsign</th>
+            <th>Grid</th>
+            <th>Rx Call</th>
+            <th>Rx Grid</th>
+            <th>Freq</th>
+            <th>Report</th>
+            <th>Action</th>       
+          </tr>
         </thead>
         <tbody></tbody>
-        </table>
+      </table>
     </div>
 
-    <!-- RIGHT: QSOs -->
-    <div style="flex:1; min-width:420px;">
-        <h4 id="activeRecentQSOs">Active / Recent QSOs</h4>
-        <table id="ft8-qsos">
+    <!-- QSOs -->
+    <div class="panel">
+      <h4 id="qsos-title">Active / Recent QSOs</h4>
+      <table id="ft8-qsos">
         <thead>
-            <tr>
+          <tr>
             <th>Start</th>
             <th>Last</th>
             <th>Call 1</th>
@@ -128,23 +146,38 @@
             <th>SNR 2</th>
             <th>Rpt 1</th>
             <th>Rpt 2</th>
+            <th>State</th> 
             <th>Duration</th>
-            </tr>
+            <th>CARED</th>
+            <th>Reply</th>
+            <th>Mine</th>
+            <th>QSO ID</th>
+            <th>Retries</th>
+            <th>Retry Msg</th>
+          </tr>
         </thead>
         <tbody></tbody>
-        </table>
+      </table>
     </div>
 
-    </div>
-
-    <h4>Current QSO</h4>
-    <div id='ft8-qso' class='muted'>No active QSO</div>
-    <div class='actions'>
-    <button class='btn' id='ft8-answer-cq'>Answer CQ</button>
-    <button class='btn secondary' id='ft8-clear-qso'>Clear QSO</button>
+    <div class="panel" id="qso-log-panel" style="display:none;">
+      <h4>QSO Log</h4>
+      <pre id="qso-log" style="height:220px; overflow:auto; background:#111; color:#0f0; padding:10px;"></pre>
     </div>
 
   </div>
+
+  <!-- CURRENT QSO -->
+  <div class="qso-box">
+    <h4>Current QSO</h4>
+    <div id='ft8-qso' class='muted'>No active QSO</div>
+
+    <div class='actions'>
+      <button class='btn' id='ft8-answer-cq'>Answer CQ</button>
+      <button class='btn secondary' id='ft8-clear-qso'>Clear QSO</button>
+    </div>
+  </div>
+
 </div>
 
 <script src="/app.js"></script>

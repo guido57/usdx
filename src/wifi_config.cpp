@@ -14,7 +14,7 @@
 #include <vector>
 #include <string>
 #include <mutex>
-#include "qso_manager.cpp"
+#include "qso_manager.h"
 #include "ft8_tx.h"
 #include "secrets.h"
 #include "ft8_freq_opt.h"
@@ -76,7 +76,7 @@ bool     g_ft8ServerConnected = false;
 bool     g_ft8ServerActive    = false;
 uint32_t g_ft8LastRxMs        = 0;
 
-QSOManager qsoManager("K1ABC", "FN31");
+QSOManager qsoManager;
 
 
 // ===== Helpers =====
@@ -180,6 +180,8 @@ static void handleApiUi() {
     doc["vfoA"] = s.vfoA; doc["vfoB"] = s.vfoB; doc["vfoSel"] = s.vfoSel;
     doc["ft8_offset"] = s.ft8_offset;
     doc["ft8_testmsg"] = s.ft8_testmsg;
+    doc["mycall"] = s.mycall;
+    doc["mygrid"] = s.mygrid;
     doc["mode"] = s.mode; doc["bandval"] = s.bandval; doc["stepsize"] = s.stepsize;
     doc["rit"] = s.rit; doc["ritActive"] = s.ritActive; doc["volume"] = s.volume;
     doc["filt"] = s.filt; doc["agc"] = s.agc; doc["nr"] = s.nr; doc["att"] = s.att;
@@ -216,7 +218,8 @@ static void handleApiUiSave() {
     // Safely copy the string from the JSON document
     #define JSET_STRING(name) strlcpy(s.name, doc[#name] | "", sizeof(s.name));
 
-JSET(vfoA); JSET(vfoB); JSET(vfoSel); JSET(ft8_offset); JSET_STRING(ft8_testmsg); JSET(mode); JSET(bandval);
+JSET(vfoA); JSET(vfoB); JSET(vfoSel); JSET(ft8_offset); JSET_STRING(ft8_testmsg); JSET_STRING(mycall); JSET_STRING(mygrid); 
+    JSET(mode); JSET(bandval);
     JSET(stepsize); JSET(rit); JSET(ritActive); JSET(volume);
     JSET(filt); JSET(agc); JSET(nr); JSET(att); JSET(smode);
     JSET(cw_tone); JSET(cw_offset); JSET(vox); JSET(vox_gain);
@@ -273,7 +276,7 @@ static void handleFt8Send() {
     int freq = doc["freq"] | 0;
     String msg = doc["msg"] | "";
 
-    if (ft8tx.requestTransmission(freq, msg.c_str()))
+    if (ft8tx.requestTransmission(freq, msg.c_str(), 255, 0)) // parity 255 = auto (next slot)
         Serial.println("FT8 scheduled for next slot: " + msg);
     else
         Serial.println("TX busy or encode error");
@@ -314,6 +317,95 @@ static void handleFt8Spots() {
     
 }
 
+
+void handleFt8Answer() {
+    if (!server.hasArg("plain")) {
+        server.send(400, "application/json", "{\"error\":\"missing body\"}");
+        return;
+    }
+
+    String body = server.arg("plain");
+
+    StaticJsonDocument<128> doc;
+    DeserializationError err = deserializeJson(doc, body);
+
+    if (err) {
+        server.send(400, "application/json", "{\"error\":\"invalid json\"}");
+        return;
+    }
+
+    uint32_t qso_id = doc["qso_id"];
+    int freq = doc["freq"] | 0;
+    
+    // 🔧 TODO: find QSO and mark as "mine" or trigger answer
+    bool found = false;
+
+    for (auto &q : qsoManager.qso_list) {
+        if (q.qso_id == qso_id) {
+            q.is_mine = true;   // or q.isMine = true depending on your naming
+            found = true;
+
+            // 👉 trigger your FT8 reply logic here
+            uint8_t theirParity = ((q.lastHeard / 15) % 2);
+            uint8_t myParity = (theirParity == 0) ? 1 : 0;
+
+            if (strlen(q.reply) == 0) return;
+
+            Serial.printf("Scheduling FT8 reply to QSO %d at %d Hz: %s theirParity=%d myParity=%d\r\n", 
+            q.qso_id, ui_get_vfo_freq() + ui_get_ft8_offset(), q.reply, theirParity, myParity);
+            ft8tx.requestTransmission(freq, q.reply, myParity, q.qso_id);
+
+            break;
+        }
+    }
+
+    if (!found) {
+        server.send(404, "application/json", "{\"error\":\"not found\"}");
+        return;
+    }
+
+    server.send(200, "application/json", "{\"status\":\"ok\"}");
+}
+
+void handleFt8Clear() {
+    if (!server.hasArg("plain")) {
+        server.send(400, "application/json", "{\"error\":\"missing body\"}");
+        return;
+    }
+
+    String body = server.arg("plain");
+
+    StaticJsonDocument<128> doc;
+    DeserializationError err = deserializeJson(doc, body);
+
+    if (err) {
+        server.send(400, "application/json", "{\"error\":\"invalid json\"}");
+        return;
+    }
+
+    uint32_t qso_id = doc["qso_id"];
+
+    bool found = false;
+
+    for (auto &q : qsoManager.qso_list) {
+        if (q.qso_id == qso_id) {
+            q.is_mine = false;   // or q.isMine = false
+            found = true;
+
+            // 👉 optionally stop transmission / clear state
+
+            break;
+        }
+    }
+
+    if (!found) {
+        server.send(404, "application/json", "{\"error\":\"not found\"}");
+        return;
+    }
+
+    server.send(200, "application/json", "{\"status\":\"ok\"}");
+}
+
 // ===== Web Server Setup =====
 
 static void startServer() {
@@ -342,9 +434,11 @@ static void startServer() {
     server.on("/api/ft8/stop", HTTP_POST, handleFt8Stop);
     server.on("/api/ft8/send", HTTP_POST, handleFt8Send);
     server.on("/api/ft8/spots", HTTP_GET, handleFt8Spots);
+    server.on("/api/ft8/answer", HTTP_POST, handleFt8Answer);
+    server.on("/api/ft8/clear",  HTTP_POST, handleFt8Clear);
 
     server.on("/api/ft8/qsos", HTTP_GET, []() {
-      server.send(200, "application/json", qsoManager.toJson());
+      server.send(200, "application/json", qsoManager.getAllQSOsJson());
     });
 
     server.on("/api/ft8/qsos/active", HTTP_GET, []() {
@@ -412,7 +506,7 @@ static void addFt8SpotFromJson(const char* json)
             sizeof(spot.mode));
 
     spot.freq_hz  = doc["frequency_hz"] | 0;
-    spot.snr_db   = doc["snr_db"] | 0;
+    spot.snr_db   = doc["snr_db"] | INT8_MIN; // use INT8_MIN to indicate missing SNR
     spot.timestamp = doc["timestamp"] | (utc_ms()/1000);
 
     // Derived fields
@@ -426,7 +520,7 @@ static void addFt8SpotFromJson(const char* json)
     if (ft8_spots.size() > 50)
         ft8_spots.erase(ft8_spots.begin());
 
-    qsoManager.addOrUpdate(spot);
+    qsoManager.processFt8Spot(spot);
 
 }
 

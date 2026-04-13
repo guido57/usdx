@@ -23,6 +23,8 @@ struct UiSettings {
 	int32_t vfoB;
 	int32_t ft8_offset;
 	char ft8_testmsg[64];
+	char mycall[10];
+	char mygrid[8];
 	int32_t bandval;
 	int16_t rit;
 	uint8_t ritActive;
@@ -62,6 +64,7 @@ uint8_t ui_mode_to_si5351_rx_mode(UiMode mode);
 
 UiMode ui_get_mode();
 int32_t ui_get_vfo_freq();
+int32_t ui_get_ft8_offset();
 uint8_t ui_get_vfo_sel();
 
 bool ui_get_rit_active();
@@ -84,3 +87,7 @@ int8_t ui_get_tx_bias();
 int8_t ui_get_filter();
 int8_t ui_get_cw_tone();
 int8_t ui_get_volume();
+
+char * ui_get_mycall();
+char * ui_get_mygrid();
+char * ui_get_ft8_testmsg();

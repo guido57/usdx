@@ -20,14 +20,15 @@
 #include "tx_bias_pwm.h"
 #include "ft8_freq_opt.h"
 #include "ant_filters.h"
-
+#include "pwrswrmeter.h"
+  
 static SI5351 si5351;
 FT8_TX ft8tx(si5351);
 FT8FreqOptimizer ft8FreqOptimizer;
 
 PCM1808 * pcm1808;
 AntennaFilters *antFilters;
-
+PowerSWRMeter *pwrswrmeter;
 static bool synthInitialized = false;
 static Si5351RxSynthState lastSynth = { 0, 0, SI5351_RX_MODE_LSB, 0, false, 700 };
 
@@ -169,14 +170,6 @@ static void processAudioPCM1808() {
       // Demodulation
       int16_t audioSample = demod_process(iDecimated, qDecimated, demodMode);
 
-      // =========== AGC (if enabled) ===========
-      // apply AGC if enabled in UI (AGC should be applied before volume control and peak measurement)
-      audioSample = applyAGC(audioSample);
-
-      // ===== PEAK AUDIO DEMOD =====
-      int16_t absAudio = fastAbs16(audioSample);
-      if (absAudio > peakAudio) peakAudio = absAudio;
-
       // ===== WEBSOCKET STREAM =====
       int32_t webAudio = audioSample;
 
@@ -185,6 +178,14 @@ static void processAudioPCM1808() {
 
       wifi_config_audio_push(lastSynth.vfoHz, webAudio);
 
+      // =========== AGC (if enabled) ===========
+      // apply AGC if enabled in UI (AGC should be applied before volume control and peak measurement)
+      audioSample = applyAGC(audioSample);
+
+      // ===== PEAK AUDIO DEMOD =====
+      int16_t absAudio = fastAbs16(audioSample);
+      if (absAudio > peakAudio) peakAudio = absAudio;
+      
       // ===== VOLUME CONTROL =====
       int32_t loudAudio = (int32_t)audioSample * audioVolume /5; // scale volume (0-10) to 0.0-2.0 range
 
@@ -232,18 +233,18 @@ static void processAudioPCM1808() {
           peakWarn(peakWebAudio) ||
           peakWarn(peakAudioOut);
 
-     // if (alert || warn) {
+    //  if (alert || warn) {
 
-        // Serial.printf(
-        //   "[PEAK %s] IQ I=%5d Q=%5d | Aud=%5d | WS=%5d | OUT=%5d\n",
-        //   alert ? "alert" : "warning",
-        //   peakIDec,
-        //   peakQDec,
-        //   peakAudio,
-        //   peakWebAudio,
-        //   peakAudioOut
-        // );
-     // }
+    //     Serial.printf(
+    //       "[PEAK %s] IQ I=%5d Q=%5d | Aud=%5d | WS=%5d | OUT=%5d\n",
+    //       alert ? "alert" : "warning",
+    //       peakIDec,
+    //       peakQDec,
+    //       peakAudio,
+    //       peakWebAudio,
+    //       peakAudioOut
+    //     );
+    //  }
 
       peakIDec = peakQDec = peakAudio = peakWebAudio = peakAudioOut = 0;
       peakLastMs = si5351_now;
@@ -1048,6 +1049,10 @@ void setup_minimal() {
 
 
 bool static setup_done = false;
+
+
+
+
 void setup() {
 
   Serial.begin(115200); 
@@ -1125,7 +1130,7 @@ void setup() {
 
   // Start WiFi stack before ADC (this sequence was previously stable)
   if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di chiamare wifi_config_setup() !!!\n");
-  ft8tx.begin(7075000); // Set FT8 TX base frequency to 7075 kHz
+  ft8tx.begin(); // Set FT8 TX base 
   wifi_config_setup();
   // delay(10000); // let WiFi task initialize before enabling ADC DMA
 
@@ -1173,6 +1178,9 @@ void setup() {
   //iq_adc_set_att_level(0); // ADC attenuation always 0 dB
 
   audioVolume = ui_get_volume(); // Initialize audio volume from UI setting
+
+  pwrswrmeter = new PowerSWRMeter(GPIO_NUM_4, GPIO_NUM_5);
+  pwrswrmeter->begin();
   
   setup_done = true;
 
@@ -1264,6 +1272,12 @@ void loop() {
   // } else {
   //   setTxBiasFromUi(TX_BIAS_FOR_RX);
   // }  
+
+  // static unsigned long lastPwrswrReport = 0;
+  // if( /*transmitting && */ millis() - lastPwrswrReport > 1000) {
+  //   Serial.printf("pwr=%.2f SWR=%.2f\n", pwrswrmeter->readPower(), pwrswrmeter->readSWR());
+  //   lastPwrswrReport = millis();
+  // }
 
   if(!transmitting) {
     // Set audio volume from UI

@@ -5,6 +5,7 @@ body {
   color: #222;
 }
 
+/* TOP BAR */
 .top {
   display: flex;
   align-items: center;
@@ -36,6 +37,7 @@ body {
   border-radius: 4px;
 }
 
+/* CONTAINER */
 .container {
   padding: 15px;
 }
@@ -52,21 +54,25 @@ body {
   display: block;
 }
 
+/* FORM ROWS */
 .row {
   display: flex;
   margin-bottom: 10px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .row label {
   flex: 0 0 120px;
 }
 
-.ctrl input {
-  flex: 1;
+.ctrl input,
+.row input,
+.row select {
   padding: 5px;
 }
 
+/* BUTTONS */
 .actions {
   margin-top: 10px;
 }
@@ -95,4 +101,106 @@ body {
 .muted {
   color: #777;
   margin-bottom: 5px;
+}
+
+/* ========================= */
+/* FT8 UI IMPROVEMENTS       */
+/* ========================= */
+
+/* Header status bar */
+.ft8-header {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  padding: 10px;
+  background: #111;
+  color: #eee;
+  border-radius: 6px;
+  margin-bottom: 15px;
+  font-size: 14px;
+}
+
+.ft8-header div {
+  padding: 4px 0;
+}
+
+/* Panels layout */
+.ft8-panels {
+  display: flex;
+  gap: 20px;
+  flex-direction: column;
+}
+
+/* Panel boxes */
+.panel {
+  flex: 1;
+  min-width: 420px;
+  background: #fff;
+  border-radius: 6px;
+  padding: 10px;
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th, td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #ddd;
+  text-align: left;
+}
+
+th {
+  background: #f0f0f0;
+  position: sticky;
+  top: 0;
+}
+
+/* Row hover */
+tr:hover {
+  background: #f5f5f5;
+}
+
+/* Slot highlighting */
+.slot-even {
+  color: #2b7cff;
+  font-weight: bold;
+}
+
+.slot-odd {
+  color: #ff8c2a;
+  font-weight: bold;
+}
+
+/* Selected row */
+.selected-row {
+  background-color: #e8e8e8;
+}
+
+/* QSO box */
+.qso-box {
+  margin-top: 15px;
+  padding: 10px;
+  background: #fafafa;
+  border-radius: 6px;
+  border: 1px solid #ddd;
+}
+
+/* Buttons spacing inside FT8 */
+#ft8 .actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.cq-row {
+  background-color: #fff3a0;
+}
+
+#ft8-qsos tr.selected {
+  outline: 2px solid #00ffff;
 }

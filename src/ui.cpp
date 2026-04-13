@@ -10,6 +10,7 @@
 #include "encoder.h"
 #include "si5351.h"
 #include "wifi_config.h"
+#include "pwrswrmeter.h"
 
 // --- Core UI state (trimmed from main.ori but behaviorally similar) ---
 enum Mode { LSB = 0, USB, CW, AM, N_MODES };
@@ -25,6 +26,9 @@ static uint8_t vfoSel = 0;  // 0=A, 1=B
 static Mode vfomode[2] = { LSB, LSB };
 static int32_t ft8_offset = 1500; // Hz
 static char ft8_testmsg[64] = ""; // FT8 test message
+static char mycall[10] = ""; // my callsign
+static char mygrid[8] = ""; // my grid locator
+
 
 static const uint8_t N_BANDS = 10;
 static const int32_t bands[N_BANDS] = {
@@ -83,6 +87,7 @@ uint8_t ui_mode_to_si5351_rx_mode(UiMode m) {
 
 UiMode ui_get_mode() { return static_cast<UiMode>(mode); }
 int32_t ui_get_vfo_freq() { return vfo[vfoSel]; }
+int32_t ui_get_ft8_offset() { return ft8_offset; }
 uint8_t ui_get_vfo_sel() { return vfoSel; }
 bool ui_get_rit_active() { return ritActive; }
 int16_t ui_get_rit() { return rit; }
@@ -100,6 +105,11 @@ int8_t ui_get_wf_thresh() { return wf_thresh; }
 int8_t ui_get_filter() { return filt; }
 int8_t ui_get_cw_tone() { return cw_tone; }
 int8_t ui_get_volume() { return volume; }
+
+char * ui_get_mycall() { return mycall; }
+char * ui_get_mygrid() { return mygrid; } 
+char * ui_get_ft8_testmsg() { return ft8_testmsg; }
+
 
 // Menu handling
 static volatile uint8_t menumode = 0;  // 0=home, 1=menu select, 2=edit
@@ -137,6 +147,18 @@ static void syncParamsToState();
 static uint8_t waterfallBuf[16][128] = {};
 static bool waterfallDirty = false;
 
+
+extern PowerSWRMeter *pwrswrmeter; // declared in main.cpp
+
+// --- Power / SWR display ---
+static float g_power_w = 0.0f;
+static float g_swr = 1.0f;
+
+void ui_set_power_swr(float pwr, float swr) {
+  g_power_w = pwr;
+  g_swr = swr;
+}
+
 // Settings persistence
 static bool settingsDirty = false;
 static uint32_t settingsLastChangeMs = 0;
@@ -161,6 +183,8 @@ static void loadSettings() {
   vfo[1] = constrain(s.vfoB, 1, 999999999);
   ft8_offset = constrain(s.ft8_offset, 0, 3000);
   strlcpy(ft8_testmsg, s.ft8_testmsg, sizeof(ft8_testmsg));
+  strlcpy(mycall, s.mycall, sizeof(mycall));
+  strlcpy(mygrid, s.mygrid, sizeof(mygrid));
   bandval = constrain(s.bandval, 0, (int32_t)N_BANDS - 1);
   rit = constrain(s.rit, (int16_t)-9999, (int16_t)9999);
   ritActive = (s.ritActive != 0);
@@ -207,6 +231,8 @@ bool ui_get_settings(UiSettings* out) {
   out->bandval = bandval;
   out->ft8_offset = ft8_offset;
   strlcpy(out->ft8_testmsg, ft8_testmsg, sizeof(out->ft8_testmsg));
+  strlcpy(out->mycall, mycall, sizeof(out->mycall));
+  strlcpy(out->mygrid, mygrid, sizeof(out->mygrid));
   out->rit = rit;
   out->ritActive = ritActive ? 1 : 0;
   out->volume = volume;
@@ -240,6 +266,8 @@ void ui_apply_settings(const UiSettings& s) {
   vfo[1] = constrain(s.vfoB, 1, 999999999);
   ft8_offset = constrain(s.ft8_offset, 0, 3000);
   strlcpy(ft8_testmsg, s.ft8_testmsg, sizeof(ft8_testmsg));
+  strlcpy(mycall, s.mycall, sizeof(mycall));
+  strlcpy(mygrid, s.mygrid, sizeof(mygrid));
   bandval = constrain(s.bandval, 0, (int32_t)N_BANDS - 1);
   Serial.printf("Applying settings: vfoA=%u, vfoB=%u, vfoSel=%u, mode=%u, bandval=%u\n", s.vfoA, s.vfoB, s.vfoSel, s.mode, s.bandval);
   rit = constrain(s.rit, (int16_t)-9999, (int16_t)9999);
@@ -289,6 +317,8 @@ static void saveSettings() {
   s.vfoB = vfo[1];
   s.ft8_offset = ft8_offset;
   strlcpy(s.ft8_testmsg, ft8_testmsg, sizeof(s.ft8_testmsg));
+  strlcpy(s.mycall, mycall, sizeof(s.mycall));
+  strlcpy(s.mygrid, mygrid, sizeof(s.mygrid));
   s.bandval = bandval;
   Serial.printf("Saving settings: vfoA=%u, vfoB=%u, vfoSel=%u, mode=%u, bandval=%u\n", s.vfoA, s.vfoB, s.vfoSel, s.mode, s.bandval);
   s.rit = rit;
@@ -598,42 +628,103 @@ enum Ft8IconState {
 
 void drawFt8Icon(int x, int y, Ft8IconState state)
 {
-    lcd.raw().drawRect(x, y, 8, 8, WHITE);  // border
+    // Always clear inside
+    lcd.raw().fillRect(x, y, 8, 8, SSD1306_BLACK);
+    lcd.raw().drawRect(x, y, 8, 8, SSD1306_WHITE);
 
     if (state == FT8_IDLE) {
-        lcd.raw().fillRect(x+1, y+1, 6, 6, BLACK); // clear inside
-        lcd.raw().drawPixel(x+3, y+3, WHITE);   // small dot
+        lcd.raw().drawPixel(x+3, y+3, SSD1306_WHITE);
     }
     else if (state == FT8_ACTIVE) {
-        lcd.raw().fillRect(x+1, y+1, 6, 6, WHITE); // filled
+        lcd.raw().fillRect(x+1, y+1, 6, 6, SSD1306_WHITE);
     }
 }
 
-static void renderIcons() {
+// static void renderIcons() {
 
-  static int8_t lastWifiBars = -1;
-  static Ft8IconState lastS = (Ft8IconState)-1;
-  static uint32_t lastFlashTime = 0;
+//   static int8_t lastWifiBars = -1;
+//   static Ft8IconState lastS = (Ft8IconState)-1;
+//   static uint32_t lastFlashTime = 0;
+
+//   Ft8IconState current_s;
+
+//   if (!g_ft8ServerConnected)
+//       current_s = FT8_OFF;
+//   // if (g_ft8ServerActive && ((millis()/400) % 2)){
+//   if (g_ft8ServerActive ){ // don't flash, just show active while server is active
+//       current_s = FT8_ACTIVE;
+//   }else{
+//       current_s = FT8_IDLE;
+//   }
+
+//   if(current_s != lastS || g_wifiBars != lastWifiBars){
+//       drawFt8Icon(105, 0, current_s);   // top-right corner
+//       drawWifiIcon(110, 16, g_wifiBars);
+//       lcd.flush();
+//       lastFlashTime = millis();
+//       lastS = current_s;
+//       lastWifiBars = g_wifiBars;
+//   }
+// }
+
+static void drawIcons() {
 
   Ft8IconState current_s;
 
-  if (!g_ft8ServerConnected)
+  if (!g_ft8ServerConnected) {
       current_s = FT8_OFF;
-  // if (g_ft8ServerActive && ((millis()/400) % 2)){
-  if (g_ft8ServerActive ){ // don't flash, just show active while server is active
+  } else if (g_ft8ServerActive) {
       current_s = FT8_ACTIVE;
-  }else{
+  } else {
       current_s = FT8_IDLE;
   }
 
-  if(current_s != lastS || g_wifiBars != lastWifiBars){
-      drawFt8Icon(105, 0, current_s);   // top-right corner
-      drawWifiIcon(110, 16, g_wifiBars);
-      lcd.flush();
-      lastFlashTime = millis();
-      lastS = current_s;
-      lastWifiBars = g_wifiBars;
-  }
+  // Clear icon area (important!)
+  lcd.raw().fillRect(104, 0, 24, 24, SSD1306_BLACK);
+
+  drawFt8Icon(105, 0, current_s);
+  drawWifiIcon(110, 16, g_wifiBars);
+}
+
+static void drawPowerSWR() {
+  // --- Power bar (horizontal) ---
+  // Map power (0–10W typical FT8) to 0–100 pixels
+  float p = g_power_w;
+  if (p < 0) p = 0;
+  if (p > 10) p = 10;
+
+  int barW = (int)(p * 10.0f); // 0–100 pixels
+
+  // Draw background
+  lcd.raw().drawRect(0, 48, 104, 6, SSD1306_WHITE);
+
+  // Fill bar
+  lcd.raw().fillRect(1, 49, barW, 4, SSD1306_WHITE);
+
+  // Label
+  lcd.setCursor(106, 48);
+  lcd.raw().print(F("P"));
+
+  // --- SWR indicator (right side) ---
+  // SWR scale: 1.0 → 3.0 mapped to 0–16 pixels vertical
+  float s = g_swr;
+  if (s < 1.0f) s = 1.0f;
+  if (s > 3.0f) s = 3.0f;
+
+  int h = (int)((s - 1.0f) * 8.0f); // 0–16 px
+
+  // Clear area
+  lcd.raw().fillRect(120, 48, 8, 16, SSD1306_BLACK);
+
+  // Draw scale box
+  lcd.raw().drawRect(120, 48, 8, 16, SSD1306_WHITE);
+
+  // Fill from bottom
+  lcd.raw().fillRect(121, 64 - h, 6, h, SSD1306_WHITE);
+
+  // Small "S" label
+  lcd.setCursor(120, 40);
+  lcd.raw().print(F("S"));
 }
 
 static void renderHome() {
@@ -657,20 +748,34 @@ static void renderHome() {
 
   // Waterfall area (bottom 16 pixels)
   lcd.raw().fillRect(0, 48, 128, 16, SSD1306_BLACK);
-  static const uint8_t dither[2][2] = { {0, 2}, {3, 1} };
+
+  // --- Waterfall (left part only) ---
   for (uint8_t y = 0; y < 16; ++y) {
-    for (uint8_t x = 0; x < 128; ++x) {
-      const uint8_t level = waterfallBuf[y][x] >> 2; // 0..3
+    for (uint8_t x = 0; x < 104; ++x) {   // reserve right side for SWR
+      const uint8_t level = waterfallBuf[y][x] >> 2;
+      static const uint8_t dither[2][2] = { {0, 2}, {3, 1} };
       if (level > dither[y & 1][x & 1]) {
         lcd.raw().drawPixel(x, 48 + y, SSD1306_WHITE);
       }
     }
   }
 
-  // Center frequency marker (inverted triangle at x=64)
-  lcd.raw().fillTriangle(64, 48, 61, 53, 67, 53, SSD1306_BLACK);
-  lcd.raw().drawTriangle(64, 48, 61, 53, 67, 53, SSD1306_WHITE);
+  // static const uint8_t dither[2][2] = { {0, 2}, {3, 1} };
+  // for (uint8_t y = 0; y < 16; ++y) {
+  //   for (uint8_t x = 0; x < 128; ++x) {
+  //     const uint8_t level = waterfallBuf[y][x] >> 2; // 0..3
+  //     if (level > dither[y & 1][x & 1]) {
+  //       lcd.raw().drawPixel(x, 48 + y, SSD1306_WHITE);
+  //     }
+  //   }
+  // }
 
+  // Center frequency marker (inverted triangle at x=64)
+  // lcd.raw().fillTriangle(64, 48, 61, 53, 67, 53, SSD1306_BLACK);
+  // lcd.raw().drawTriangle(64, 48, 61, 53, 67, 53, SSD1306_WHITE);
+
+  drawPowerSWR();
+  drawIcons();
   lcd.flush();
 }
 
@@ -955,7 +1060,7 @@ void ui_setup() {
   }
   lcd.showTestPattern();
 
-  encoder_freq.begin(GPIO_ROT_A, GPIO_ROT_B, GPIO_ROT_SW, GPIO_L_SW, GPIO_R_SW);
+  encoder_freq.begin(GPIO_ROT_A, GPIO_ROT_B, GPIO_ROT_SW, 255, 255);
   encoder_freq.onRotate(handleRotateFreq);
   encoder_freq.onButton(handleButtonFreq);
 
@@ -963,7 +1068,7 @@ void ui_setup() {
   encoder_menu.onRotate(handleRotateMenu);
   encoder_menu.onButton(handleButtonMenu);
 
-
+  
   if (!settingsLoaded) {
     loadSettings();
     syncParamsToState();
@@ -978,6 +1083,7 @@ void ui_load_settings() {
 }
 
 unsigned long lastRenderIcons = 0;
+unsigned long lastMeterUpdate = 0;
 void ui_loop() {
   encoder_freq.update();
   encoder_menu.update();
@@ -988,6 +1094,22 @@ void ui_loop() {
     processEvent(ev);
   }
 
+  // --- NEW: periodic pwr swr meter update ---
+  if (pwrswrmeter && millis() - lastMeterUpdate > 200) {
+    float p = pwrswrmeter->readPower();
+    float s = pwrswrmeter->readSWR();
+
+    ui_set_power_swr(p, s);
+
+    lastMeterUpdate = millis();
+
+    // optional: refresh only home screen if needed
+    if (menumode == 0) {
+      waterfallDirty = true;  // triggers redraw
+    }
+  }
+
+
   if (change) {
     settingsDirty = true;
     settingsLastChangeMs = millis();
@@ -997,10 +1119,7 @@ void ui_loop() {
     waterfallDirty = false;
     renderHome();
   }
-  if(millis() - lastRenderIcons > 100) {
-    lastRenderIcons = millis();
-    renderIcons();
-  }  
+  
   if (settingsDirty && (uint32_t)(millis() - settingsLastChangeMs) > 1500U) {
     saveSettings();
     settingsDirty = false;

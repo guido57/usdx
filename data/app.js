@@ -1,3 +1,6 @@
+let allQSOs = [];
+let selectedQsoId = null;
+
 (function(){
 let ws=null,audioCtx=null,node=null,queue=[],cur=null,curIdx=0;
 const statusEl=document.getElementById('audioStatus');
@@ -86,7 +89,7 @@ const ft8Status = document.getElementById('ft8-status');
 const ft8Freq = document.getElementById('ft8-frequency');
 const ft8Offset = document.getElementById('ft8-offset');
 const ft8TestMsg = document.getElementById('ft8-testmsg');
-
+const mycall = document.getElementById('mycall');
 async function init() {
     await fetchUi(); // Wait for the UI to be built from the API
     
@@ -105,6 +108,8 @@ async function init() {
     if (testMsgInput && ft8TestMsg) {
         ft8TestMsg.value = testMsgInput.value || '';   
     }
+    
+    
 }
 init();
 
@@ -119,7 +124,7 @@ document.getElementById('uiForm')?.addEventListener('submit', async e=>{
 
 // FT8 Controls
 document.getElementById('ft8-start')?.addEventListener('click', () => {
-    fetch('/api/ft8/start', { method: 'POST',
+    fetch('/api/ft8/start', { method: 'POST',headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ freq: parseInt(ft8Freq.value)+parseInt(ft8Offset.value), msg: ft8TestMsg.value })
      })
      .then(r => r.json())
@@ -127,7 +132,7 @@ document.getElementById('ft8-start')?.addEventListener('click', () => {
 });
 
 document.getElementById('ft8-stop')?.addEventListener('click', () => {
-    fetch('/api/ft8/stop', { method: 'POST' })
+    fetch('/api/ft8/stop', { method: 'POST',headers:{'Content-Type':'application/json'} })
         .then(r => r.json())
         .then(data => ft8Status.innerText = 'Status: ' + data.message);
 });
@@ -135,6 +140,7 @@ document.getElementById('ft8-stop')?.addEventListener('click', () => {
 document.getElementById('ft8-send-test')?.addEventListener('click', () => {
     fetch('/api/ft8/send', {
         method: 'POST',
+        headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ freq: parseInt(ft8Freq.value)+parseInt(ft8Offset.value), msg: ft8TestMsg.value })
     })
     .then(r => r.json())
@@ -170,7 +176,7 @@ async function syncAndSave(controlEl, targetName) {
 // For the Frequency dropdown
 ft8Freq?.addEventListener('change', (e) => {
     // Change also the tuned frequency in the main UI form
-    frequencyInput = document.querySelector('input[name="vfoA"]');
+    const frequencyInput = document.querySelector('input[name="vfoA"]');
     if (frequencyInput) {
         frequencyInput.value = ft8Freq.value;
     }
@@ -211,11 +217,20 @@ function formatEpoch(epochSeconds) {
     return `${day}/${mon}/${year} ${h}:${m}:${s}`;
 }
 
-// Function to add a new spot to table
+function getFt8Slot(epochSeconds) {
+    const d = new Date(epochSeconds * 1000);
+    const sec = d.getSeconds();
+    return (sec < 30) ? 'EVEN' : 'ODD';
+}
+
 function addSpot(spot){
+    const slot = getFt8Slot(spot.time);
+
     const tr = document.createElement('tr');
+
     tr.innerHTML = `
       <td>${formatEpoch(spot.time)}</td>
+      <td>${slot}</td>
       <td>${spot.callsign}</td>
       <td>${spot.grid}</td>
       <td>${spot.receiver_callsign}</td>
@@ -223,19 +238,34 @@ function addSpot(spot){
       <td>${spot.freq}</td>
       <td>${spot.report}</td>
     `;
-     if(spot.cq){
-        tr.innerHTML += `<td><button class="answer-btn">Answer CQ</button></td>`;
-        tr.querySelector('.answer-btn').addEventListener('click', ()=>{
-          currentQso = spot;
-          qsoDiv.textContent = `QSO with ${spot.callsign} on ${spot.freq} Hz, report ${spot.report}`;
-        });
-     }else{
-        tr.innerHTML += `<td></td>`;
-    } 
 
+    // Slot styling
+    const slotCell = tr.children[1];
+    if(slot === 'EVEN') slotCell.classList.add('slot-even');
+    else slotCell.classList.add('slot-odd');
+
+    // CQ button
+    if(spot.cq){
+        const td = document.createElement('td');
+        const btn = document.createElement('button');
+        btn.className = 'answer-btn';
+        btn.textContent = 'Answer CQ';
+
+        btn.addEventListener('click', ()=>{
+            currentQso = spot;
+            qsoDiv.textContent = `QSO with ${spot.callsign} on ${spot.freq} Hz, report ${spot.report}`;
+        });
+
+        td.appendChild(btn);
+        tr.appendChild(td);
+    } else {
+        tr.innerHTML += `<td></td>`;
+    }
 
     spotsTableBody.prepend(tr);
-    if(spotsTableBody.children.length>50) spotsTableBody.removeChild(spotsTableBody.lastChild);
+
+    if(spotsTableBody.children.length > 50)
+        spotsTableBody.removeChild(spotsTableBody.lastChild);
 }
 
 function formatTime(ts) {
@@ -260,6 +290,77 @@ function formatDate(ts) {
 
 // function to add a QSO row
 const qsosTableBody = document.querySelector('#ft8-qsos tbody');
+
+qsosTableBody.addEventListener('dblclick', async (event) => {
+    const tr = event.target.closest('tr');
+    if (!tr) return;
+
+    const cells = tr.querySelectorAll('td');
+
+    const qso = tr.qso;
+    // Adjust indexes based on your table structure!
+    const isMine = qso.isMine;
+    const qsoId = qso.qso_id;
+    
+    // const iscq = (qso.state === 'CQ');
+    // if(!iscq){ 
+    //     alert('You can only answer/clear a CQ spot!')
+    //     return
+    // }    
+    
+    const url = isMine ? '/api/ft8/clear' : '/api/ft8/answer';
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ freq: parseInt(ft8Freq.value)+parseInt(ft8Offset.value), qso_id: qsoId })
+        });
+
+        if (!response.ok) {
+            console.error('Request failed:', response.status);
+        }
+
+    } catch (err) {
+        console.error('Error:', err);
+    }
+});
+
+function showQsoLog(qsoId) {
+    const q = allQSOs.find(x => x.qso_id == qsoId);
+    if (!q || !q.log) return;
+
+    const panel = document.getElementById('qso-log-panel');
+    const logEl = document.getElementById('qso-log');
+
+    panel.style.display = 'block';
+
+    let out = '';
+
+    for (const e of q.log) {
+
+        const d = new Date(e.ts * 1000);
+
+        const yy = String(d.getFullYear()).slice(-2);
+        const mm = String(d.getMonth()+1).padStart(2,'0');
+        const dd = String(d.getDate()).padStart(2,'0');
+        const hh = String(d.getHours()).padStart(2,'0');
+        const mi = String(d.getMinutes()).padStart(2,'0');
+        const ss = String(d.getSeconds()).padStart(2,'0');
+
+        const time = `${yy}${mm}${dd} ${hh}:${mi}:${ss}`;
+
+        const rtx = e.rtx == 84 ? 'TX' : (e.rtx == 82 ? 'RX' : '??');
+
+        out += `${time} ${rtx.padEnd(3)} ${e.state.padEnd(18)} ${e.msg}\n`;
+    }
+
+    logEl.textContent = out;
+    logEl.scrollTop = logEl.scrollHeight;
+}
+
 function addQsoRow(qso){
     const tr = document.createElement('tr');
 
@@ -268,41 +369,81 @@ function addQsoRow(qso){
     const minutes = Math.floor(durationSec / 60);
     const seconds = durationSec % 60;
     const durationStr = `${minutes}m ${seconds}s`;
+    const stateText = qso.state || '';
 
     tr.innerHTML = `
       <td>${formatTime(qso.firstSeen)}</td>
       <td>${formatTime(qso.lastHeard)}</td>
       <td>${qso.call1}</td>
       <td>${qso.grid1 || ''}</td>
-      <td>${qso.snr1 ?? ''}</td>
+      <td>${qso.snr1 === -128 ? '' : qso.snr1}</td>
       <td>${qso.call2}</td>
       <td>${qso.grid2 || ''}</td>
-      <td>${qso.snr2 ?? ''}</td>
+      <td>${qso.snr2 === -128 ? '' : qso.snr2}</td>
       <td>${qso.report1 || ''}</td>
       <td>${qso.report2 || ''}</td>
-      <td>${qso.completed ? '✅' : '…'}</td>
+      <td>${qso.state === 'DONE' ? '✅' : qso.state}</td>
       <td>${durationStr}</td>
+      <td>${qso.cared || ''}</td>
+      <td>${qso.reply || ''}</td>
+      <td>${qso.isMine ? '👤' : ''}</td>
+      <td>${qso.qso_id}</td>
+      <td>${qso.retryCount > 0 ? qso.retryCount : ''}</td>
+      <td>${qso.retryMessage || ''}</td>
+      
     `;
 
+    tr.qso = qso; // attach the whole qso object for later use
+
     //Highlight CQs
-    if(qso.cq){
-         tr.style.backgroundColor = "#ffff00"; // yellow
+    switch(qso.state){
+        case 'CQ':
+            tr.style.backgroundColor = "#fff3a0";
+            break;
+        case 'CALLING':
+            tr.style.backgroundColor = "#d0f0ff";
+            break;
+        case 'REPORT_RCVD':
+            tr.style.backgroundColor = "#d0ffd0";
+            break;
+        case 'RRR_SENT':
+            tr.style.backgroundColor = "#e0d0ff";
+            break;
+        case 'REPORT_EXCHANGED':
+            tr.style.backgroundColor = "#e0d0ff";
+            break;
+        case 'DONE':
+            tr.style.opacity = "0.5";
+            break;
     }
 
-    // Dim completed QSOs
-    if(qso.completed) tr.style.opacity = "0.6";
+    if (qso.isMine) {
+        tr.style.fontWeight = "bold";
+        tr.style.boxShadow = "inset 8px 0 0 #ffd700";
+    }
 
     // Click on row to auto-fill current QSO
     tr.style.cursor = "pointer";
-    tr.addEventListener('click', () => {
-        currentQso = {
-            call: qso.call1,
-            freq: ft8Freq.value
-        };
-        qsoDiv.textContent = `Selected QSO: ${qso.call1} ⇄ ${qso.call2}, last report ${qso.report2}`;
-    });
+    // tr.addEventListener('click', () => {
+    //     currentQso = {
+    //         call1: qso.call1,
+    //         call2: qso.call2,
+    //         state: qso.state,
+    //         freq: ft8Freq.value
+    //     };
+    //     qsoDiv.textContent = `Selected QSO: ${qso.call1} ⇄ ${qso.call2} [${qso.state}]`;    
+    // });
 
     qsosTableBody.appendChild(tr);
+
+    tr.addEventListener('click', () => {
+        selectedQsoId = qso.qso_id;
+        showQsoLog(qso.qso_id);
+
+        // highlight selected row
+        document.querySelectorAll('#ft8-qsos tr').forEach(r => r.classList.remove('selected'));
+        tr.classList.add('selected');
+    });
 }
 
 
@@ -323,19 +464,41 @@ async function fetchFt8QSOs(){
         const resp = await fetch('/api/ft8/qsos');
         const data = await resp.json();
         if(!Array.isArray(data)) return;
-        document.getElementById('activeRecentQSOs').textContent = formatDate(data[0]?.firstSeen) + ' Active / Recent QSOs '+`(${data.length})`  ;
+        allQSOs = data; // keep a master list of QSOs for reference
+        document.getElementById('qsos-title').innerText = formatDate(data[0]?.firstSeen) + ' Active / Recent QSOs '+`(${data.length})`  ;
 
         // <-- CLEAR TABLE BEFORE ADDING NEW QSOs
         qsosTableBody.innerHTML = '';
 
-        // Sort by lastHeard descending (newest first)
+        function statePriority(s){
+            switch(s){
+                case 'CQ': return 0;
+                case 'CALLING': return 1;
+                case 'REPORT_RCVD': return 2;
+                case 'REPORT_EXCHANGED': return 3;
+                case 'RRR_SENT': return 4;
+                case 'DONE': return 5;
+                default: return 6;
+            }
+        }
+
         data.sort((a, b) => {
-            // ensure numeric comparison
+            const pa = statePriority(a.state);
+            const pb = statePriority(b.state);
+
+            // prima per stato
+            if(pa !== pb) return pa - pb;
+
+            // poi per tempo (più recenti sopra)
             return Number(b.lastHeard) - Number(a.lastHeard);
         });
-
         // add rows
         data.forEach(addQsoRow);
+
+        // shwo log of selected QSO if still present
+        if (selectedQsoId !== null) {
+           showQsoLog(selectedQsoId);
+        }
 
     }catch(e){console.error(e);}
 }

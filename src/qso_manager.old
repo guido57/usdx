@@ -1,0 +1,709 @@
+#include <Arduino.h>
+#include <ArduinoJson.h>
+#include <vector>
+#include <cstring>
+#include <cctype>
+#include "wifi_config.h"
+#include "ui.h"
+#include "ft8_tx.h"
+
+extern FT8_TX ft8tx; // declared in main.cpp
+
+class QSOManager {
+public:
+    QSOManager() {}
+    // ------------------------------------------------------------
+    enum QsoState {
+        QSO_CQ,
+        QSO_CALLING,
+        QSO_REPORT_RCVD,
+        QSO_REPORT_EXCHANGED,
+        QSO_DONE
+    };
+                           // Message               QSO              FIELDS                                        
+    enum Ft8MsgType {      //                                                                                             
+        MSG_CQ,            // CQ CALL1 GRID      // CQ               CALL1=CALL1, CALL2="",    GRID1=GRID,SNR1=SNR   
+        MSG_CQ_NO_GRID,    // CQ CALL1           // CQ               CALL1=CALL1, CALL2="",    GRID1=""  ,SNR1=SNR   
+        MSG_CALL,          // CALL1 CALL2 GRID   // CALLING          CALL1=CALL1, CALL2=CALL2, GRID1=GRID,SNR2=SNR 
+        MSG_CALL_NO_GRID,  // CALL1 CALL2        // CALLING          CALL1=CALL1, CALL2=CALL2, GRID1=""  ,SNR2=SNR
+        MSG_REPORT,        // CALL2 CALL1 -RPT   // REPORT_RCVD      CALL1=CALL1, CALL2=CALL2, RPT1=RPT,  SNR1=SNR 
+        MSG_R_REPORT,      // CALL1 CALL2 R-RPT  // REPORT_EXCHANGED CALL1=CALL1, CALL2=CALL2, RPT2=RPT,  SNR2=SNR 
+        MSG_RR73,          // CALL2 CALL1 RR73   // DONE             CALL1=CALL1, CALL2=CALL2,            SNR1=SNR 
+        MSG_73,           //  CALL1 CALL2 73     // DONE             CALL1=CALL1, CALL2=CALL2             SNR2=SNR 
+        MSG_UNKNOWN
+    };
+
+    //                           Received Message      Reply
+    //                           CQ CALL2 GRID         CALL2 MYCALL GRID
+    //                           CQ CALL2              CALL2 MYCALL 
+    //                           MYCALL CALL2 MYGRID   CALL2 MYCALL -RPT2   
+    //                           MYCALL CALL2          CALL2 MYCALL -RPT2   
+    //                           MYCALL CALL2 -RPT1    CALL2 MYCALL R-RPT2
+    //                           MYCALL CALL2 R-RPT1   CALL2 MYCALL RR73
+    //                           MYCALL CALL2 RR73     CALL2 MYCALL 73   
+    // };
+
+
+
+    struct Ft8Fields {
+        Ft8MsgType type;
+
+        char call1[16];
+        char call2[16];
+
+        char grid[8];
+        char report[8];
+
+        bool hasCall1;
+        bool hasCall2;
+        bool hasGrid;
+        bool hasReport;
+    };
+
+    struct QSO {
+        char call1[12];
+        char call2[12];
+        char grid1[8];
+        char grid2[8];
+
+        int8_t snr1;
+        int8_t snr2;
+
+        uint32_t firstSeen;
+        uint32_t lastHeard;
+
+        char report1[12];
+        char report2[12];
+
+        QsoState state;
+        char cared[6] = "_____"; //C=CQ A=CALLED R=REPORT E=REPORT_EXCHANGED D=DONE
+        bool cq;
+
+        char reply[24];
+
+        int qso_id;
+        bool is_mine;
+    };
+
+    std::vector<QSO> qso_list;
+
+    // ------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------
+    void safeCopy(char* dst, const char* src, size_t size) {
+        if (!dst || !src || size == 0) return;
+        strncpy(dst, src, size - 1);
+        dst[size - 1] = '\0';
+    }
+
+    bool isCallsign(const char *s) {
+        if (!s) return false;
+        size_t len = strlen(s);
+        if (len < 3 || len > 12) return false;
+
+        bool hasLetter = false, hasDigit = false;
+
+        for (size_t i = 0; i < len; i++) {
+            if (!isalnum(s[i]) && s[i] != '/') return false;
+            if (isalpha(s[i])) hasLetter = true;
+            if (isdigit(s[i])) hasDigit = true;
+        }
+
+        return hasLetter && hasDigit;
+    }
+
+    bool isGrid(const char *s) {
+        if (!s) return false;
+        return strlen(s) == 4 &&
+               isalpha(s[0]) && isalpha(s[1]) &&
+               isdigit(s[2]) && isdigit(s[3]);
+    }
+
+    bool isReport(const char *s) {
+        if (!s) return false;
+
+        if ((s[0] == '+' || s[0] == '-') && isdigit(s[1]))
+            return true;
+
+        if (s[0] == 'R' && (s[1] == '+' || s[1] == '-') && isdigit(s[2]))
+            return true;
+
+        return false;
+    }
+
+    String getActiveQSOsJson() {
+        JsonDocument doc;
+        JsonArray arr = doc.to<JsonArray>();
+
+        for (const auto &q : qso_list) {
+            if (q.state == QSO_DONE) continue;
+
+            JsonObject o = arr.add<JsonObject>();
+            o["call1"] = q.call1;
+            o["call2"] = q.call2;
+            o["state"] = stateToString(q.state);
+            o["cq"]    = q.cq;
+        }
+
+        String out;
+        serializeJson(doc, out);
+        return out;
+    }
+
+    const char* stateToString(QsoState s) {
+        switch(s){
+            case QSO_CQ: return "CQ";
+            case QSO_CALLING: return "CALLING";
+            case QSO_REPORT_RCVD: return "REPORT_RCVD";
+            case QSO_REPORT_EXCHANGED: return "REPORT_EXCHANGED";
+            case QSO_DONE: return "DONE";
+            default: return "?";
+        }
+    }
+
+    const char* extractFt8Message(const char* line) {
+        if (!line) return "";
+
+        const char* p = strchr(line, '~');
+
+        // Se non c'è '~', ritorna tutta la linea
+        if (!p) return line;
+
+        // Salta '~' e spazi successivi
+        p++; 
+        while (*p == ' ') p++;
+
+        return p;
+    }
+
+    String getCompletedQSOsJson() {
+        JsonDocument doc;
+        JsonArray arr = doc.to<JsonArray>();
+
+        for (const auto &q : qso_list) {
+            if (q.state != QSO_DONE) continue;
+
+            JsonObject o = arr.add<JsonObject>();
+            o["call1"] = q.call1;
+            o["call2"] = q.call2;
+            o["state"] = stateToString(q.state);
+        }
+
+        String out;
+        serializeJson(doc, out);
+        return out;
+    }
+
+    // ------------------------------------------------------------
+    // Robust message parser (NO fragile substring matching)
+    // ------------------------------------------------------------
+    Ft8MsgType parseMessage(const char *msg, Ft8Fields &out) {
+        if (!msg) return MSG_UNKNOWN;
+
+        // Reset
+        memset(&out, 0, sizeof(out));
+        out.type = MSG_UNKNOWN;
+
+        char tmp[64];
+        strncpy(tmp, msg, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
+
+        char *tokens[5] = {0};
+        int ntok = 0;
+
+        // Tokenize
+        char *p = strtok(tmp, " ");
+        while (p && ntok < 5) {
+            tokens[ntok++] = p;
+            p = strtok(nullptr, " ");
+        }
+
+        if (ntok == 0) return MSG_UNKNOWN;
+
+        // --------------------------------------------------------
+        // CQ
+        // --------------------------------------------------------
+        if (strcmp(tokens[0], "CQ") == 0) {
+
+            if (ntok >= 2 && isCallsign(tokens[1])) {
+                safeCopy(out.call1, tokens[1], sizeof(out.call1));
+                out.hasCall1 = true;
+            }
+
+            // CQ CALL GRID
+            if (ntok >= 3 && isGrid(tokens[2])) {
+                safeCopy(out.grid, tokens[2], sizeof(out.grid));
+                out.hasGrid = true;
+
+                out.type = MSG_CQ;
+                return out.type;
+            }
+
+            // CQ CALL  (no grid)
+            out.type = MSG_CQ_NO_GRID;
+            return out.type;
+        }
+        // --------------------------------------------------------
+        // CALL1 CALL2 ...
+        // --------------------------------------------------------
+        if (ntok >= 2) {
+
+            if (isCallsign(tokens[0])) {
+                safeCopy(out.call1, tokens[0], sizeof(out.call1));
+                out.hasCall1 = true;
+            }
+
+            if (isCallsign(tokens[1])) {
+                safeCopy(out.call2, tokens[1], sizeof(out.call2));
+                out.hasCall2 = true;
+            }
+        }
+        // --------------------------------------------------------
+        // Third token (type discriminator)
+        // --------------------------------------------------------
+        if (ntok >= 3) {
+
+            // 73 / RR73
+            if (strcmp(tokens[2], "RR73") == 0) {
+                out.type = MSG_RR73;
+                return out.type;
+            }
+
+            if (strcmp(tokens[2], "73") == 0) {
+                out.type = MSG_73;
+                return out.type;
+            }
+
+            // Report
+            if (isReport(tokens[2])) {
+                safeCopy(out.report, tokens[2], sizeof(out.report));
+                out.hasReport = true;
+
+                if (tokens[2][0] == 'R') {
+                    out.type = MSG_R_REPORT;
+                } else {
+                    out.type = MSG_REPORT;
+                }
+                return out.type;
+            }
+
+            // Grid (CALL message with locator)
+            if (isGrid(tokens[2])) {
+                safeCopy(out.grid, tokens[2], sizeof(out.grid));
+                out.hasGrid = true;
+            }
+        }
+
+        // --------------------------------------------------------
+        // Default
+        // --------------------------------------------------------
+      
+        if (out.hasCall1 && out.hasCall2) {
+            if (out.hasGrid) {
+                out.type = MSG_CALL;              // CALL1 CALL2 GRID
+            } else {
+                out.type = MSG_CALL_NO_GRID;      // CALL1 CALL2
+            }
+        } else {
+            out.type = MSG_UNKNOWN;
+        }
+
+
+        return out.type;
+    }
+
+    String generateReply(Ft8MsgType type, const Ft8Fields &f, int snr_db) {
+
+        String myCall = String(ui_get_mycall());
+        String myGrid = String(ui_get_mygrid());
+
+        // Safety: no callsign configured
+        if (myCall.isEmpty()) return "";
+
+        String call1 = String(f.call1);
+        String call2 = String(f.call2);
+
+     
+        // --------------------------------------------------------
+        // Determine if message is relevant to me
+        // --------------------------------------------------------
+        bool isCQ = (type == MSG_CQ || type == MSG_CQ_NO_GRID);
+
+        bool directedToMe = (call1 == myCall);
+
+        if (!isCQ && !directedToMe) {
+            return ""; // ❌ ignore messages not addressed to me
+        }
+    
+        // --------------------------------------------------------
+        // If it is not a CQ and the message is not directed to me, ignore it
+        // If you get here means that call1=MYCALL and the other station is call2, so you should reply to call2
+        // --------------------------------------------------------
+        
+        // --------------------------------------------------------
+        // Format report
+        // --------------------------------------------------------
+        char rpt[5];
+        snprintf(rpt, sizeof(rpt), "%+03d", snr_db);
+
+        // --------------------------------------------------------
+        // Generate reply
+        // --------------------------------------------------------
+        String reply = "";
+        switch (type) {
+
+            case MSG_CQ:
+                // CQ CALL GRID → CALL MYCALL GRID
+                reply = call1 + " " + myCall + " " + myGrid;
+                break;
+
+            case MSG_CQ_NO_GRID:
+                // CQ CALL → CALL MYCALL
+                reply = call1 + " " + myCall;
+                break;
+
+            case MSG_CALL:
+            case MSG_CALL_NO_GRID:
+                // MYCALL CALL → CALL MYCALL -RPT
+                reply = call2 + " " + myCall + " " + String(rpt);
+                break;
+
+            case MSG_REPORT:
+                // MYCALL CALL -RPT → CALL MYCALL R-RPT
+                reply = call2 + " " + myCall + " R" + String(rpt);
+                break;
+
+            case MSG_R_REPORT:
+                // MYCALL CALL R-RPT → CALL MYCALL RR73
+                reply = call2 + " " + myCall + " RR73";
+                break;
+
+
+            case MSG_RR73:
+                // MYCALL CALL RR73 → CALL MYCALL 73
+                reply = call2 + " " + myCall + " 73";
+                break;
+
+            default:
+                reply = "";
+                
+        }
+        if(reply.length()){
+            //Serial.println("From call1=" + String(call1) + " call2=" + String(call2) + " type=" + String(f.type) + " Generated reply: " + reply);
+            return reply;
+        } else
+            return "";
+
+    }
+
+    // ------------------------------------------------------------
+    // Main message processor
+    // ------------------------------------------------------------
+    void processFt8Spot(const Ft8Spot &s) {
+        const char* msg = extractFt8Message(s.decoded_line); // get the message part after '~' if present, otherwise the whole line
+
+        Ft8Fields f;
+    
+        Ft8MsgType type = parseMessage(msg, f);              // parse the message and extract fields
+
+        if(strcmp(f.call2, ui_get_mycall()) == 0){
+            Serial.println("Decoded my own transmission. Discard it.");
+            return; // ignore messages that do not involve my callsign
+        }
+
+        if (type == MSG_UNKNOWN) return;
+        String reply = "";  
+        if(type == MSG_CQ || type == MSG_CQ_NO_GRID || strcmp(f.call1, ui_get_mycall()) == 0 ){
+            reply = generateReply(type, f, s.snr_db);     // generate the appropriate reply message based on the message type and extracted fields
+        }   
+        QSO q = addOrUpdate(type, f, s.timestamp, s.snr_db, reply);  // add/update the QSO list based on the message type, extracted fields, timestamp and SNR
+        
+        if(reply != "" && strcmp(ui_get_mycall(),f.call1)==0){ // if I am call1, the other station is call2, so reply to call2{
+            Serial.println("with msg " + String(msg) + " I decoded f.call1=" + String(f.call1) + " f.call2=" + String(f.call2) + "QSO state is " + String(q.state) + ". Generated reply: " + reply);
+            
+            uint8_t theirParity = ((q.lastHeard / 15) % 2);
+            uint8_t myParity = (theirParity == 0) ? 1 : 0;
+
+            Serial.printf("Scheduling FT8 reply to QSO %d at %d Hz: %s with parity %d\n", q.qso_id, ui_get_vfo_freq() + ui_get_ft8_offset(), q.reply, myParity);
+            ft8tx.requestTransmission(ui_get_vfo_freq() + ui_get_ft8_offset(), q.reply, myParity);
+        }
+    }
+    
+    QSO addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_t timestamp, int8_t snr_db, const String &reply) {
+
+        if (!f.hasCall1) return QSO{}; // safety check: call1 is mandatory for all message types we handle
+
+        const char* a = f.call1;
+        const char* b = f.hasCall2 ? f.call2 : "";
+
+        QSO *qso = nullptr;
+
+        // --------------------------------------------------------
+        // MATCH (simmetrico)
+        // --------------------------------------------------------
+        for (auto &q : qso_list) {
+
+            bool match = false;
+
+            if (strlen(q.call2) > 0 && f.hasCall2) {
+                // complete QSO → bidirectional match
+                if ((strcmp(q.call1, a) == 0 && strcmp(q.call2, b) == 0) ||
+                    (strcmp(q.call1, b) == 0 && strcmp(q.call2, a) == 0)) {
+                    match = true;
+                }
+            } else {
+                // incomplete QSO → match on call1
+                if (strcmp(q.call1, a) == 0 && 
+                   (strlen(q.call2) == 0 || !f.hasCall2 || strcmp(q.call2, b) == 0)) {
+                    match = true;
+                }
+            }
+
+            if (match) {
+                qso = &q;
+                break;
+            }
+        }
+        // --------------------------------------------------------
+        // CREATE if needed (ANY message, not only CQ)
+        // --------------------------------------------------------
+        if (!qso) {
+
+            static int next_qso_id = 0;    
+
+            QSO q{};
+            safeCopy(q.call1, a, sizeof(q.call1));
+
+            if (f.hasCall2)
+                safeCopy(q.call2, b, sizeof(q.call2));
+
+            q.report1[0] = '\0';
+            q.report2[0] = '\0';
+
+            q.snr1 = INT8_MIN;
+            q.snr2 = INT8_MIN;
+
+            q.firstSeen = timestamp;
+            q.lastHeard = timestamp;
+
+            q.cq = (type == MSG_CQ);
+            q.state = (type == MSG_CQ || type == MSG_CQ_NO_GRID) ? QSO_CQ : QSO_CALLING;
+
+            q.qso_id = next_qso_id++;
+
+            
+            switch(type) {
+                case MSG_CQ:
+                case MSG_CQ_NO_GRID:
+                    q.cared[0] = 'C';
+                    break;
+                case MSG_CALL:
+                case MSG_CALL_NO_GRID:
+                    q.cared[1] = 'A';
+                    break;
+                case MSG_REPORT:
+                    q.cared[2] = 'R';
+                    break;
+                case MSG_R_REPORT:
+                    q.cared[3] = 'E';
+                    break;
+                case MSG_RR73:
+                case MSG_73:
+                    q.cared[4] = 'D';
+                    break;
+            }
+
+            qso_list.push_back(q);
+            qso = &qso_list.back();
+            
+        }
+
+        // --------------------------------------------------------
+        // UPDATE BASIC
+        // --------------------------------------------------------
+        qso->lastHeard = timestamp;
+
+        if (type == MSG_CQ || type == MSG_CQ_NO_GRID)
+            qso->cq = true;
+
+        // --------------------------------------------------------
+        // COMPLETE CALL2 if missing
+        // --------------------------------------------------------
+        if (strlen(qso->call2) == 0 && f.hasCall2) {
+            if (strcmp(f.call1, qso->call1) == 0)
+                safeCopy(qso->call2, f.call2, sizeof(qso->call2));
+            else
+               safeCopy(qso->call2, f.call1, sizeof(qso->call2));
+            // 🔴 as soon as call2 appears, the QSO is no longer CQ
+            if (qso->state == QSO_CQ)
+                qso->state = QSO_CALLING;
+        }
+        // --------------------------------------------------------
+        // GRID (directional)
+        // --------------------------------------------------------
+        if (f.hasGrid){
+            if(type==MSG_CQ || type==MSG_CQ_NO_GRID)
+                safeCopy(qso->grid1, f.grid, sizeof(qso->grid1));
+            else
+                safeCopy(qso->grid2, f.grid, sizeof(qso->grid2));
+        }    
+
+        // --------------------------------------------------------
+        // SNR (directional)
+        // --------------------------------------------------------
+        if (snr_db != INT8_MIN) {
+            if(type==MSG_CQ || type==MSG_CQ_NO_GRID){
+                qso->snr1 = snr_db;
+            } else {
+                if (strcmp(f.call2, qso->call1) == 0)
+                    qso->snr1 = snr_db;
+                else if (strcmp(f.call2, qso->call2) == 0)
+                    qso->snr2 = snr_db;
+            }
+        }
+
+        // --------------------------------------------------------
+        // REPORTS (directional)
+        // --------------------------------------------------------
+        if (f.hasReport && strlen(qso->call2) > 0) {
+
+            if (strcmp(f.call1, qso->call1) == 0)
+                safeCopy(qso->report2, f.report, sizeof(qso->report2));
+
+            else if (strcmp(f.call1, qso->call2) == 0)
+                safeCopy(qso->report1, f.report, sizeof(qso->report1));
+        }
+
+        // --------------------------------------------------------
+        // STATE = DIRECT mapping from message
+        // --------------------------------------------------------
+        switch (type) {
+
+            case MSG_CQ:
+            case MSG_CQ_NO_GRID:
+                //qso->state = QSO_CQ;
+                break;
+
+            case MSG_CALL:
+            case MSG_CALL_NO_GRID:
+                if (qso->state < QSO_CALLING)
+                    qso->state = QSO_CALLING;
+                break;
+
+            case MSG_REPORT:
+                if (qso->state < QSO_REPORT_RCVD)
+                    qso->state = QSO_REPORT_RCVD;
+                break;
+
+            case MSG_R_REPORT:
+                if (qso->state < QSO_REPORT_EXCHANGED)
+                    qso->state = QSO_REPORT_EXCHANGED;
+                break;
+
+            case MSG_RR73:
+            case MSG_73:
+                qso->state = QSO_DONE;
+                break;
+
+            default:
+                break;
+        }
+
+        switch(type) {
+            case MSG_CQ:
+            case MSG_CQ_NO_GRID:
+                qso->cared[0] = 'C';
+                break;
+            case MSG_CALL:
+            case MSG_CALL_NO_GRID:
+                qso->cared[1] = 'A';
+                break;
+            case MSG_REPORT:
+                qso->cared[2] = 'R';
+                break;
+            case MSG_R_REPORT:
+                qso->cared[3] = 'E';
+                break;
+            case MSG_RR73:
+            case MSG_73:
+                qso->cared[4] = 'D';
+                break;
+        }
+
+        qso->is_mine = (strcmp(qso->call1, ui_get_mycall()) == 0) ||
+                       (strcmp(qso->call2, ui_get_mycall()) == 0); // mark as "mine" if call1 or call2 matches my call (this is a simplification, but works for most cases)
+
+        // reduce the list size if needed (remove oldest non-"mine" first)
+        if (qso_list.size() >= 100) {
+
+            bool removed = false;
+
+            for (auto it = qso_list.begin(); it != qso_list.end(); ++it) {
+                if (!it->is_mine) {
+                    qso_list.erase(it);
+                    removed = true;
+                    break;
+                }
+            }
+
+            // fallback: if all are "mine", remove oldest anyway
+            if (!removed) {
+                qso_list.erase(qso_list.begin());
+            }
+        }
+
+        // --------------------------------------------------------
+        // REPLY (store the latest generated reply for this QSO, if any)
+        // --------------------------------------------------------
+        if(reply.length() > 0)
+            safeCopy(qso->reply, reply.c_str(), sizeof(qso->reply));
+
+        return *qso;
+
+    }
+    // ------------------------------------------------------------
+    // JSON
+    // ------------------------------------------------------------
+    String getAllQSOsJson() {
+        JsonDocument doc;
+        JsonArray arr = doc.to<JsonArray>();
+
+        for (const auto &q : qso_list) {
+            JsonObject o = arr.add<JsonObject>();
+
+            o["call1"] = q.call1;
+            o["call2"] = q.call2;
+            o["grid1"] = q.grid1;
+            o["grid2"] = q.grid2;
+            o["snr1"]  = q.snr1;
+
+            if (q.snr2 == INT8_MIN) o["snr2"] = nullptr;
+            else o["snr2"] = q.snr2;
+
+            o["report1"] = q.report1;
+            o["report2"] = q.report2;
+
+            o["cq"] = q.cq;
+
+            o["firstSeen"] = q.firstSeen;
+            o["lastHeard"]  = q.lastHeard;
+            o["duration"] = (q.lastHeard > q.firstSeen) ? (q.lastHeard - q.firstSeen) : 0;
+
+            o["state"] = stateToString(q.state);
+            o["completed"] = (q.state == QSO_DONE);
+
+            o["reply"] = q.reply;
+            o["cared"] = q.cared;
+
+            o["isMine"] = q.is_mine;
+            o["qso_id"] = q.qso_id;
+        }
+
+        String out;
+        serializeJson(doc, out);
+        return out;
+    }
+
+private:
+   
+};
