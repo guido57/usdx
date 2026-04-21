@@ -9,11 +9,13 @@
 #include "configuration.h"
 #include "ant_filters.h"
 #include "qso_manager.h"
+#include "ft8_freq_opt.h"
 
 extern uint8_t audioVolume; // declared in main.cpp, used here to mute audio during TX
 extern bool transmitting; // declared in main.cpp, used here to track if we are currently transmitting
 extern AntennaFilters *antFilters; // declared in main.cpp, used here to control TX/RX relay and antenna filters
 extern QSOManager qsoManager; // declared in wifi_config.cpp, used here to manage QSOs and generate replies
+extern FT8FreqOptimizer ft8FreqOptimizer; // declared in main.cpp
 
 std::vector<FT8_TX::TxJob> txJobs;
 uint32_t nextJobId = 1;
@@ -35,7 +37,7 @@ void FT8_TX::begin() {
         "FT8_TX",
         4096,
         this,
-        2,
+        1,
         nullptr,
         1
     );
@@ -123,12 +125,12 @@ uint8_t FT8_TX::getRetriesforQso(int qso_id) {
 
 
 void FT8_TX::cancelJobsForQso(int qso_id) {
-    Serial.printf("Cancelling jobs for QSO %d\n", qso_id);
+    // Serial.printf("Cancelling jobs for QSO %d\n", qso_id);
     for (auto &j : txJobs) {
-        Serial.printf("Examining job id=%u QSO id=%d\n", j.id, qso_id);
+        //Serial.printf("Examining job id=%u QSO id=%d\n", j.id, qso_id);
         if (j.qso_id == qso_id) {
             j.cancelled = true;
-            Serial.printf("Cancelled job id=%u QSO=%d\n", j.id, qso_id);
+            // Serial.printf("Cancelled job id=%u QSO=%d\n", j.id, qso_id);
         }
     }
 }
@@ -139,39 +141,33 @@ FT8_TX::TxJob FT8_TX::makeJobFromRequest(const TxRequest& req, int64_t absoluteS
 
     job.id = nextJobId++;
     job.qso_id = req.qso_id;
-
     job.baseFreq = req.baseFreq;
-    job.parity   = req.parity;
-
+    job.retryCount = 0;
+    job.transmitting = false; // Initialize transmitting flag to false
     strlcpy(job.message, req.message, sizeof(job.message));
 
     job.cancelled = false;
 
-    // recalc target slot based on requested parity and current absolute slot
-    int64_t slot = absoluteSlot;
+    switch (req.parity)
+    {
+    case 0:
+        job.targetSlot = (absoluteSlot & ~1LL) + 2; // next even slot    
+        job.parity = 0; // mark as even parity
+        break;
+    
+    case 1:    
+        job.targetSlot = (absoluteSlot | 1LL) + 2; // next odd slot
+        job.parity = 1; // mark as odd parity
+        break;
 
-    // always go to future
-    slot += 1;
-
-    // parity correction
-    if (job.parity != 255 && (slot & 1) != job.parity) {
-        slot++;
+    default:
+        job.targetSlot = absoluteSlot + 1; // default to next slot without parity constraint
+        job.parity = job.targetSlot & 1; // mark as no parity constraint
+        break;
     }
-
-    // optional safety: ensure not in past
-    if (slot <= absoluteSlot) {
-        slot = absoluteSlot + 1;
-    }
-
-    job.targetSlot = slot;
-    
-    
-    
-    job.retryCount = 0;
 
     return job;
 }
-
 
 inline int64_t getNowMs() {
     struct timeval tv;
@@ -215,9 +211,17 @@ void FT8_TX::taskLoop() {
 
             txJobs.push_back(job);
 
-            Serial.printf("[FT8] queued job id=%u QSO=%u parity=%d: %s\n",
-                          job.id, job.qso_id, job.parity, job.message);
+            // Serial.printf("[FT8] queued job id=%u QSO=%u parity=%d: %s\n",
+            //               job.id, job.qso_id, job.parity, job.message);
         }
+
+        if(ui_get_ft8_offset_enabled()) {
+            // get the calculated ft8 offset
+            uint16_t bestFt8Offset = 
+                ft8FreqOptimizer.best_freq(ui_get_vfo_freq(), false, false);
+            Serial.printf("[FT8] applying best frequency offset of %d Hz\n", bestFt8Offset);
+            setFt8Offset(bestFt8Offset); // save it to the UI state so it can be displayed and used for the next transmissions
+        }   
 
         // --------------------------------------------------------
         // 3) Select best job (eligible NOW)
@@ -226,27 +230,28 @@ void FT8_TX::taskLoop() {
         int64_t currentSlot = getNowMs() / 15000LL;
 
         for (auto &j : txJobs) {
-
+            // Serial.printf("[FT8] examining job id=%u QSO=%u parity=%d targetSlot=%lld cancelled=%d: %s\n",
+            //               j.id, j.qso_id, j.parity, j.targetSlot, j.cancelled, j.message);
             if (j.cancelled) continue;
 
             // not yet time → skip
-            if (j.targetSlot > currentSlot) continue;
+            if (j.targetSlot > currentSlot + 1) continue;
 
             if (!best || j.targetSlot < best->targetSlot) {
                 best = &j;
             }
         }
-
+        // Serial.printf("[FT8] currentSlot=%lld selected job id=%u QSO=%u parity=%d targetSlot=%lld: %s\n",
+        //               currentSlot, best ? best->id : 0, best ? best->qso_id : 0, best ? best->parity : 255, best ? best->targetSlot : 0, best ? best->message : "N/A");
         // --------------------------------------------------------
         // 4) Enforce parity
         // --------------------------------------------------------
         int64_t txSlot = currentSlot + 1;
 
         if (best && best->parity != 255 && (txSlot & 1) != best->parity) {
-            Serial.printf("[FT8] job %u parity mismatch, skipping\n", best->id);
+            // Serial.printf("[FT8] job %u parity mismatch, skipping\n", best->id);
             best = nullptr;
         }
-
         // --------------------------------------------------------
         // 5) Wait exact slot boundary (tight)
         // --------------------------------------------------------
@@ -268,7 +273,10 @@ void FT8_TX::taskLoop() {
         // --------------------------------------------------------
         if (best) {
 
-            Serial.printf("[FT8] TX job %u: %s\n", best->id, best->message);
+            best->baseFreq = ui_get_vfo_freq() + ui_get_ft8_offset(); 
+            
+            // Serial.printf("[FT8] TX job %u: %s\n", best->id, best->message);
+            best ->transmitting = true; // Mark job as transmitting for UI purposes (not used in scheduling logic)
 
             uint32_t startTime = esp_timer_get_time();
 
@@ -306,6 +314,7 @@ void FT8_TX::taskLoop() {
             // ----------------------------------------------------
             // End TX
             // ----------------------------------------------------
+            best->transmitting = false; // Clear transmitting flag for UI purposes
             si5351.oe(0b00000011);
             setRxAttFromUi(ui_get_att_rf());
             setTxBiasFromUi(TX_BIAS_FOR_RX);
@@ -314,7 +323,7 @@ void FT8_TX::taskLoop() {
             antFilters->setRx();
             audioVolume = ui_get_volume();
 
-            Serial.printf("[FT8] TX done job %u\n", best->id);
+            // Serial.printf("[FT8] TX done job %u\n", best->id);
 
             // ----------------------------------------------------
             // 7) Post-TX: QSO + retry logic
@@ -353,270 +362,14 @@ void FT8_TX::taskLoop() {
                 best->targetSlot = retrySlot;
                 best->cancelled = false;
 
-                Serial.printf("[FT8] retry job %u nextSlot=%lld\n",
-                              best->id, retrySlot);
+                // Serial.printf("[FT8] retry job %u nextSlot=%lld\n",
+                //               best->id, retrySlot);
             }
         }
         else {
             // No TX this slot
-            Serial.printf("[FT8] idle slot\n");
+            // Serial.printf("[FT8] idle slot\n");
         }
     }
 }
 
-// void FT8_TX::taskLoop() {
-
-//     TxRequest currentReq;
-//     bool hasRequest = false;
-//     uint32_t selectedJobId = 0;
-//     bool hasSelectedJob = false;
-
-//     while (true) {
-
-//         // get seconds and milliseconds since epoch to determine current slot and parity
-//         // struct timeval tv;
-//         // gettimeofday(&tv, NULL);
-//         // int64_t nowMs = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000; // ms since epoch
-//         // time_t now_sec = tv.tv_sec;                                      // seconds since epoch
-//         int64_t nowMs = getNowMs(); // ms since epoch
-
-//         // calculate current absolute slot since epoch and parity
-//         int64_t absoluteSlot = nowMs / 15000LL; // 15 seconds per slot
-//         uint8_t currentParity = absoluteSlot & 1; // 0 even, 1 odd
-
-//         // calculate ms to next slot boundary (for scheduling)
-//         int64_t nextSlotMs = (int64_t)(absoluteSlot + 1) * 15000LL; // ms until next slot
-//         int64_t msToSlot = nextSlotMs - nowMs;
-        
-//         if (msToSlot < 0) msToSlot = 0; // Sanity check (should never happen)
-//         // ------------------------------------------------------------
-//         // Fetch next TX request (only if idle and none pending)
-//         // ------------------------------------------------------------
-//         if (!transmitting && !hasRequest) {
-
-//             // 1. Drain queue → convert to jobs
-//             TxRequest req;
-//             while (xQueueReceive(txQueue, &req, 0) == pdTRUE) {
-
-//                 TxJob job = makeJobFromRequest(req, absoluteSlot);
-//                 txJobs.push_back(job);
-
-//                 Serial.printf("[FT8] queued job id=%u QSO id=%u parity=%d: %s\n", job.id, job.qso_id, job.parity, job.message);
-//             }
-
-//             // 3. Select next job
-//             TxJob * best = nullptr;
-
-//             for (auto &j : txJobs) {
-
-//                 if (j.cancelled) continue;
-
-//                 if (j.targetSlot > absoluteSlot)
-//                     continue;
-
-//                 if (!best || j.targetSlot < best->targetSlot) {
-//                     best = &j;
-//                 }
-//             }
-
-//             if (best) {
-
-//                 // store ONLY the ID (safe across time)
-//                 selectedJobId = best->id;
-//                 hasSelectedJob = true;
-
-//                 currentReq.baseFreq = best->baseFreq;
-//                 currentReq.parity   = best->parity;
-//                 strlcpy(currentReq.message, best->message, sizeof(currentReq.message));
-
-//                 hasRequest = true;
-
-//                 Serial.printf("[FT8] selected job id=%u parity=%d: %s\n", best->id, best->parity , best->message);
-//             }
-//         }
-//         // ------------------------------------------------------------
-//         // TRANSMIT
-//         // ------------------------------------------------------------
-//         if (hasRequest) {
-
-//             // Copy request locally (freeze it)
-//             uint32_t baseFreqLocal = currentReq.baseFreq;
-//             uint8_t requestedParityLocal = currentReq.parity;
-
-//             char messageLocal[64];
-//             strlcpy(messageLocal, currentReq.message, sizeof(messageLocal));
-
-//             Serial.printf("[FT8] absoluteSlot: %lld  parity: %d  ms to next slot: %lld\r\n", absoluteSlot, requestedParityLocal, msToSlot);
-
-//             // --------------------------------------------------------
-//             // Pre-wait until ~500ms before slot
-//             // --------------------------------------------------------
-//             if (msToSlot > 500) {
-//                 Serial.printf("[FT8] pre-waiting for %lld ms until pre-slot boundary\n", msToSlot - 500);
-//                 vTaskDelay(pdMS_TO_TICKS(msToSlot - 500));
-//             }
-//             // --------------------------------------------------------
-//             // Pre-configure hardware
-//             // --------------------------------------------------------
-//             si5351.setupPllForTx(baseFreqLocal);
-//             setRxAttFromUi(0);
-//             setTxBiasFromUi(ui_get_tx_bias());
-//             audioVolume = 0;
-//             // --------------------------------------------------------
-//             // Precision wait for slot boundary
-//             // --------------------------------------------------------
-//             Serial.printf("[FT8] precision waiting for slot boundary with fine precision. \n");
-//             int64_t startSlot = getNowMs() / 15000LL;
-
-//             int64_t targetSlot = startSlot + 1;
-
-//             // enforce parity
-//             if (requestedParityLocal != 255 && (targetSlot & 1) != requestedParityLocal) {
-//                 targetSlot++;
-//             }
-
-//             int64_t targetTimeMs = targetSlot * 15000LL;
-
-//             while (getNowMs() < targetTimeMs) {
-//                 taskYIELD();
-//             }
-//             // --------------------------------------------------------
-//             // START TX
-//             // --------------------------------------------------------
-//             uint32_t startTime = esp_timer_get_time();
-
-//             transmitting = true;
-//             hasRequest = false;   // ✅ consume request here
-
-//             antFilters->setTx();
-//             si5351.oe(0b00000111);
-
-//             int64_t txNowMs = getNowMs();
-//             Serial.printf("[FT8] start sending: %s at slot %lld with parity: %d\r\n",
-//                           messageLocal, txNowMs / 15000LL , requestedParityLocal);
-
-//             for (int i = 0; i < 79; i++) {
-
-//                 uint64_t f = (uint64_t)baseFreqLocal * 100ULL +
-//                              (uint64_t)symbols[i] * toneSpacing;
-
-//                 si5351.freqb_fast(f);
-
-//                 while (true) {
-//                     uint32_t now = esp_timer_get_time();
-//                     uint32_t target = startTime + (i + 1) * symbolPeriodUs;
-
-//                     if (now >= target) break;
-
-//                     if (target - now > 2000) {
-//                         vTaskDelay(1);
-//                     } else {
-//                         taskYIELD();
-//                     }
-//                 }
-//             }
-
-//             // --------------------------------------------------------
-//             // END TX → back to RX
-//             // --------------------------------------------------------
-//             si5351.oe(0b00000011);
-
-//             setRxAttFromUi(ui_get_att_rf());
-//             setTxBiasFromUi(TX_BIAS_FOR_RX);
-
-//             transmitting = false;
-
-//             antFilters->setRx();
-//             audioVolume = ui_get_volume();
-
-//             Serial.printf("[FT8] stop sending\r\n");
-
-//             // --------------------------------------------------------
-//             // Log transmission in QSO manager
-//             // --------------------------------------------------------
-//             time_t timestamp;
-//             time(&timestamp);
-
-//             QSOManager::Ft8Fields f;
-//             QSOManager::Ft8MsgType type = qsoManager.parseMessage(messageLocal, f);
-
-//             Serial.printf("[FT8] transmission succeeded, add this spot to the QSO list: %s\r\n",
-//                           messageLocal);    
-            
-//             // submit this transmitted message to the same processor used for received messages, to create/update QSO and trigger potential replies and retries based on the new QSO state    
-//             QSOManager::QSO *q =
-//                 qsoManager.addOrUpdate(type, f, timestamp, INT8_MAX, "");
-            
-//             Serial.printf("[FT8] QSO state after transmission: %d\r\n", q->state);
-
-//             // log this transmission in the QSO log as well (type 'T' for transmitted)
-//             Serial.printf("[FT8] adding log entry to qso_id %d for transmitted message: %s call1=%s call2=%s type=%d QSO state is %d. Generated reply: %s\r\n", q->qso_id, messageLocal, f.call1, f.call2, type, q->state, q->reply);
-//             qsoManager.addLog(q, 'T', timestamp, q->state, messageLocal);    
-
-//             // look for the job we just executed and decide if we need to schedule a retry based on the new QSO state    
-//             TxJob* selectedJob = nullptr;    
-//             if (hasSelectedJob) {
-//                 for (auto &j : txJobs) {
-//                     if (j.id == selectedJobId && j.cancelled == false) {
-//                         selectedJob = &j;
-//                         break;
-//                     }
-//                 }
-//             }
-
-//             // decide if we need to schedule a retry based on the new QSO state    
-//             if(selectedJob){    
-                
-//                 if (q->state == QSOManager::QSO_DONE) 
-//                 {
-//                     Serial.printf("[FT8] QSO completed for job %u: %s, no retry needed.\n", selectedJob->id, selectedJob->message   );
-//                     selectedJob->cancelled = true; // Mark job as done, no retry needed
-//                 }else{
-
-//                     if (selectedJob->retryCount >= qsoManager.MAX_RETRIES) {
-//                         selectedJob->cancelled = true; // Mark job as cancelled to prevent further retries
-//                         Serial.printf("[FT8] max retries reached for job %u: %s\n", selectedJob->id, selectedJob->message);
-
-//                     } else {
-
-//                         selectedJob->retryCount++;
-
-//                         // time_t now_sec;
-//                         // time(&now_sec);
-//                         // int64_t txSlot = now_sec / 15;
-//                         struct timeval tv;
-//                         gettimeofday(&tv, NULL);
-//                         int64_t nowMs = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000;
-
-//                         int64_t txSlot = nowMs / 15000LL;
-
-//                         int64_t slot = txSlot + 3; // retry after 3 slots (45 seconds)
-
-//                         // but enforce parity
-//                         if (selectedJob->parity != 255 && (slot & 1) != selectedJob->parity) {
-//                             slot++;
-//                         }
-
-//                         selectedJob->targetSlot = slot;
-
-//                         selectedJob->cancelled = false;  // 👈 re-arm
-
-//                         Serial.printf("[FT8] rescheduled job %u retry=%d nextSlot=%lld\n",
-//                                     selectedJob->id, selectedJob->retryCount, selectedJob->targetSlot);
-//                     }
-//                 }        
-//             }
-//             hasSelectedJob  = false; // reset selection for next round 
-
-//         }else {
-//             // --------------------------------------------------------
-//             // Idle → sleep efficiently
-//             // --------------------------------------------------------
-//             int sleepMs = (msToSlot > 100) ? 100 : msToSlot;
-
-//             if (sleepMs > 0) {
-//                 vTaskDelay(pdMS_TO_TICKS(sleepMs));
-//             }
-//         }
-//     }
-// }

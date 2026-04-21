@@ -25,8 +25,9 @@ public:
         
         int64_t targetSlot;   // 👈 NEW
         uint8_t retryCount;   // 👈 moved here
-
+        
         bool cancelled;
+        bool transmitting; // for UI purposes only (not used in scheduling logic)
     };
 
     
