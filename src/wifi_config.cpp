@@ -1,6 +1,5 @@
 #include "wifi_config.h"
 #include "esp_wifi.h"
-
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -179,6 +178,7 @@ static void handleApiUi() {
     JsonDocument doc;
     doc["vfoA"] = s.vfoA; doc["vfoB"] = s.vfoB; doc["vfoSel"] = s.vfoSel;
     doc["ft8_offset"] = s.ft8_offset;
+    doc["ft8_offset_enabled"] = s.ft8_offset_enabled;
     doc["ft8_testmsg"] = s.ft8_testmsg;
     doc["mycall"] = s.mycall;
     doc["mygrid"] = s.mygrid;
@@ -218,7 +218,9 @@ static void handleApiUiSave() {
     // Safely copy the string from the JSON document
     #define JSET_STRING(name) strlcpy(s.name, doc[#name] | "", sizeof(s.name));
 
-JSET(vfoA); JSET(vfoB); JSET(vfoSel); JSET(ft8_offset); JSET_STRING(ft8_testmsg); JSET_STRING(mycall); JSET_STRING(mygrid); 
+    JSET(vfoA); JSET(vfoB); JSET(vfoSel); 
+    JSET(ft8_offset); JSET(ft8_offset_enabled); JSET_STRING(ft8_testmsg); 
+    JSET_STRING(mycall); JSET_STRING(mygrid); 
     JSET(mode); JSET(bandval);
     JSET(stepsize); JSET(rit); JSET(ritActive); JSET(volume);
     JSET(filt); JSET(agc); JSET(nr); JSET(att); JSET(smode);
@@ -269,24 +271,6 @@ static void handleFt8Stop() {
     server.send(200, "application/json", "{\"message\":\"Stopped\"}");
 }
 
-// Send a test FT8 CQ (or message)
-static void handleFt8Send() {
-    JsonDocument doc;
-    deserializeJson(doc, server.arg("plain"));
-    int freq = doc["freq"] | 0;
-    String msg = doc["msg"] | "";
-
-    if (ft8tx.requestTransmission(freq, msg.c_str(), 255, 0)) // parity 255 = auto (next slot)
-        Serial.println("FT8 scheduled for next slot: " + msg);
-    else
-        Serial.println("TX busy or encode error");
-
-    // then log
-    //Serial.printf("[FT8] Send test at %d Hz: %s\n", freq, msg.c_str());
-    char buf[128];
-    sprintf(buf,"{\"message\":\"[FT8] Send test at %d Hz: %s\"}", freq, msg.c_str());
-    server.send(200, "application/json", buf);
-}
 
 // Get decoded spots
 static void handleFt8Spots() {
@@ -317,6 +301,36 @@ static void handleFt8Spots() {
     
 }
 
+// Send an FT8 CQ (or message)
+static void handleFt8Send() {
+    JsonDocument doc;
+    deserializeJson(doc, server.arg("plain"));
+    int freq = doc["freq"] | 0;
+    String msg = doc["msg"] | "";
+    String reply;
+
+    // create a new QSO entry for this outgoing message (for tracking in UI)
+    QSOManager::Ft8Fields f;
+    QSOManager::Ft8MsgType type = qsoManager.parseMessage(msg.c_str(),f);
+    if(type == QSOManager::MSG_UNKNOWN) {
+        server.send(400, "application/json", "{\"error\":\"unrecognized message format\"}");
+        return;
+    }
+    
+    f.ts  = utc_ms() / 1000; // current time in seconds   
+    uint8_t parity = ((f.ts / 15) + 1) % 2; // simple parity based on next time slot
+    QSOManager::QSO * q = qsoManager.addOrUpdate(f.type,f,f.ts, parity, reply); // create a new QSO entry and get its ID
+    
+    Serial.printf("Scheduling FT8 TX for QSO %d at %d Hz: %s myParity=%d\r\n", 
+            q->qso_id, ui_get_vfo_freq() + ui_get_ft8_offset(), msg.c_str(), parity);
+            ft8tx.requestTransmission(freq, msg.c_str(), parity, q->qso_id);
+
+    // then log on the WEB UI
+    //Serial.printf("[FT8] Send test at %d Hz: %s\n", freq, msg.c_str());
+    char buf[128];
+    sprintf(buf,"{\"message\":\"[FT8] Send message at %d Hz: %s\"}", freq, msg.c_str());
+    server.send(200, "application/json", buf);
+}
 
 void handleFt8Answer() {
     if (!server.hasArg("plain")) {
@@ -406,6 +420,25 @@ void handleFt8Clear() {
     server.send(200, "application/json", "{\"status\":\"ok\"}");
 }
 
+
+// Get memory stats
+static void handleMemoryStats() {
+    JsonDocument doc;
+    JsonObject o = doc.to<JsonObject>();
+
+    o["heap_total"]     = ESP.getHeapSize();
+    o["heap_free"]      = ESP.getFreeHeap();
+    o["heap_min_free"]  = ESP.getMinFreeHeap();
+    o["heap_max_alloc"] = ESP.getMaxAllocHeap();
+
+    o["psram_total"] = ESP.getPsramSize();
+    o["psram_free"]  = ESP.getFreePsram();
+
+    String out;
+    serializeJson(doc, out);
+    server.send(200, "application/json", out);
+}
+
 // ===== Web Server Setup =====
 
 static void startServer() {
@@ -425,6 +458,7 @@ static void startServer() {
 
     server.serveStatic("/app.js", LittleFS, "/app.js");
     server.serveStatic("/style.css", LittleFS, "/style.css");
+    server.serveStatic("/cty.dat", LittleFS, "/cty.dat");
 
     server.on("/api/status", HTTP_GET, handleApiStatus);
     server.on("/api/ui", HTTP_GET, handleApiUi);
@@ -449,6 +483,10 @@ static void startServer() {
         server.send(200, "application/json", qsoManager.getCompletedQSOsJson());
     });
 
+    server.on("/api/memstats", HTTP_GET, handleMemoryStats);
+
+    server.serveStatic("/data", LittleFS, "/data");
+
     server.begin(); 
     serverStarted = true;     
     Serial.println("[WebServer] HTTP server started");
@@ -463,9 +501,9 @@ static void addFt8SpotFromJson(const char* json)
         Serial.println("[FT8] JSON parse error");
         return;
     }
-
-    //Serial.printf("json=%s locator=%s\n", json, (const char*)doc["locator"] );
-    ft8FreqOptimizer.store(json); // feed the FT8 frequency optimizer with the new spot data
+    
+    // uint32_t spot_freq = ui_get_vfo_freq(); // get the current VFO frequency
+    // ft8FreqOptimizer.store(json, spot_freq); // feed the FT8 frequency optimizer with the new spot data
 
     Ft8Spot spot{};   // zero-initialize safely
 

@@ -28,6 +28,14 @@ public:
     enum Ft8MsgType {
         MSG_CQ,
         MSG_CQ_NO_GRID,
+        MSG_CQ_GRID,
+        MSG_CQDX,
+        MSG_CQDX_GRID,
+        MSG_CQDX_ONLY,
+        MSG_CQ_REGION,
+        MSG_CQ_TEST,
+        // END OF CQ TYPES
+
         MSG_CALL,
         MSG_CALL_NO_GRID,
         MSG_REPORT,
@@ -47,6 +55,9 @@ public:
         bool hasCall2;
         bool hasGrid;
         bool hasReport;
+        int snr_db;
+        uint32_t ts;
+        bool is_cq;
     };
 
     struct QSOLogEntry {

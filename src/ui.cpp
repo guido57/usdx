@@ -25,6 +25,7 @@ static int32_t vfo[2] = { 7100000, 7200000 };
 static uint8_t vfoSel = 0;  // 0=A, 1=B
 static Mode vfomode[2] = { LSB, LSB };
 static int32_t ft8_offset = 1500; // Hz
+static bool ft8_offset_enabled = false;
 static char ft8_testmsg[64] = ""; // FT8 test message
 static char mycall[10] = ""; // my callsign
 static char mygrid[8] = ""; // my grid locator
@@ -88,6 +89,7 @@ uint8_t ui_mode_to_si5351_rx_mode(UiMode m) {
 UiMode ui_get_mode() { return static_cast<UiMode>(mode); }
 int32_t ui_get_vfo_freq() { return vfo[vfoSel]; }
 int32_t ui_get_ft8_offset() { return ft8_offset; }
+bool ui_get_ft8_offset_enabled() { return ft8_offset_enabled; }
 uint8_t ui_get_vfo_sel() { return vfoSel; }
 bool ui_get_rit_active() { return ritActive; }
 int16_t ui_get_rit() { return rit; }
@@ -182,6 +184,7 @@ static void loadSettings() {
   vfo[0] = constrain(s.vfoA, 1, 999999999);
   vfo[1] = constrain(s.vfoB, 1, 999999999);
   ft8_offset = constrain(s.ft8_offset, 0, 3000);
+  ft8_offset_enabled = (s.ft8_offset_enabled != 0);
   strlcpy(ft8_testmsg, s.ft8_testmsg, sizeof(ft8_testmsg));
   strlcpy(mycall, s.mycall, sizeof(mycall));
   strlcpy(mygrid, s.mygrid, sizeof(mygrid));
@@ -230,6 +233,7 @@ bool ui_get_settings(UiSettings* out) {
   out->vfoB = vfo[1];
   out->bandval = bandval;
   out->ft8_offset = ft8_offset;
+  out->ft8_offset_enabled = ft8_offset_enabled ? 1 : 0;
   strlcpy(out->ft8_testmsg, ft8_testmsg, sizeof(out->ft8_testmsg));
   strlcpy(out->mycall, mycall, sizeof(out->mycall));
   strlcpy(out->mygrid, mygrid, sizeof(out->mygrid));
@@ -265,6 +269,7 @@ void ui_apply_settings(const UiSettings& s) {
   vfo[0] = constrain(s.vfoA, 1, 999999999);
   vfo[1] = constrain(s.vfoB, 1, 999999999);
   ft8_offset = constrain(s.ft8_offset, 0, 3000);
+  ft8_offset_enabled = (s.ft8_offset_enabled != 0);
   strlcpy(ft8_testmsg, s.ft8_testmsg, sizeof(ft8_testmsg));
   strlcpy(mycall, s.mycall, sizeof(mycall));
   strlcpy(mygrid, s.mygrid, sizeof(mygrid));
@@ -316,6 +321,7 @@ static void saveSettings() {
   s.vfoA = vfo[0];
   s.vfoB = vfo[1];
   s.ft8_offset = ft8_offset;
+  s.ft8_offset_enabled = ft8_offset_enabled ? 1 : 0;
   strlcpy(s.ft8_testmsg, ft8_testmsg, sizeof(s.ft8_testmsg));
   strlcpy(s.mycall, mycall, sizeof(s.mycall));
   strlcpy(s.mygrid, mygrid, sizeof(s.mygrid));
@@ -354,6 +360,10 @@ static void saveSettings() {
 // --- Helpers ---
 static int32_t currentFreq() { return vfo[vfoSel]; }
 static void setCurrentFreq(int32_t f) { vfo[vfoSel] = constrain(f, 1, 999999999); }
+void setFt8Offset(int32_t offset) { 
+  ft8_offset = constrain(offset, 0, 3000); 
+  saveSettings();
+}
 
 static String formatFrequency(int32_t f) {
   // Format integer Hz using '.' as thousands separator, e.g. 7.100.000
@@ -398,6 +408,7 @@ static int32_t param_mode = mode;
 static int32_t param_step = stepsize;
 static int32_t param_band = bandval;
 static int32_t param_ft8_offset = ft8_offset;
+static int32_t param_ft8_offset_enabled = ft8_offset_enabled ? 1 : 0;
 static int32_t param_vfo_sel = vfoSel;
 static int32_t param_freqA = vfo[0];
 static int32_t param_freqB = vfo[1];
@@ -434,6 +445,7 @@ static Param params[] = {
   { "Step",      &param_step,      STEP_1M, STEP_1, false, P_ENUM, kStepLabel, (uint8_t)(sizeof(kStepLabel) / sizeof(kStepLabel[0])) },
   { "Band",      &param_band,      0, N_BANDS - 1, true,  P_BAND, nullptr, 0 },
   { "FT8 Offset", &param_ft8_offset, 0, 3000, false, P_INT, nullptr, 0 },
+  { "FT8 Auto Offset",    &param_ft8_offset_enabled, 0, 1, true, P_BOOL, kOnOffLabel, 2 },
   { "VFO Sel",   &param_vfo_sel,   0, 1, true,            P_INT,  nullptr, 0 },
   { "Freq A",    &param_freqA,     1, 999999999, false,   P_FREQ, nullptr, 0 },
   { "Freq B",    &param_freqB,     1, 999999999, false,   P_FREQ, nullptr, 0 },
@@ -494,6 +506,7 @@ static void syncParamsToState() {
   param_step = stepsize;
   param_band = bandval;
   param_ft8_offset = ft8_offset;
+  param_ft8_offset_enabled = ft8_offset_enabled ? 1 : 0;
   param_vfo_sel = vfoSel;
   param_freqA = vfo[0];
   param_freqB = vfo[1];
@@ -534,6 +547,7 @@ static void applyParamToState() {
   volume = static_cast<int8_t>(constrain(param_volume, 0, 10));
   filt = static_cast<int8_t>(constrain(param_filter, 0, 7));
   ft8_offset = constrain(param_ft8_offset, 0, 3000);
+  ft8_offset_enabled = (param_ft8_offset_enabled != 0);
   agc = static_cast<int8_t>(constrain(param_agc, 0, 1));
   nr = static_cast<int8_t>(constrain(param_nr, 0, 1));
   att = static_cast<int8_t>(constrain(param_att, 0, 2));

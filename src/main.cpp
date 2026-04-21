@@ -1273,11 +1273,11 @@ void loop() {
   //   setTxBiasFromUi(TX_BIAS_FOR_RX);
   // }  
 
-  // static unsigned long lastPwrswrReport = 0;
-  // if( /*transmitting && */ millis() - lastPwrswrReport > 1000) {
-  //   Serial.printf("pwr=%.2f SWR=%.2f\n", pwrswrmeter->readPower(), pwrswrmeter->readSWR());
-  //   lastPwrswrReport = millis();
-  // }
+  static unsigned long lastPwrswrReport = 0;
+  if( transmitting && millis() - lastPwrswrReport > 1000) {
+    Serial.printf("pwr=%.2f SWR=%.2f\n", pwrswrmeter->readPower(), pwrswrmeter->readSWR());
+    lastPwrswrReport = millis();
+  }
 
   if(!transmitting) {
     // Set audio volume from UI
@@ -1287,7 +1287,8 @@ void loop() {
   static uint32_t lastStatusMs = 0;
   if (millis() - lastStatusMs > 15000) {
     lastStatusMs = millis();
-    uint16_t bestFreqOffset =
-        ft8FreqOptimizer.best_freq(7074000, false, false);
+    uint16_t bestFreq =
+        ft8FreqOptimizer.best_freq(ui_get_vfo_freq(), false, false);
+    Serial.printf("[FT8 Freq Optimizer] Best frequency: %u Hz    it took %lu ms\n", bestFreq, millis() - lastStatusMs );      
   }
 }

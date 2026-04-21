@@ -9,6 +9,8 @@ void ui_setup();
 void ui_loop();
 void ui_load_settings();
 void ui_set_waterfall_line(const uint8_t* bins, size_t count);
+void setFt8Offset(int32_t offset);
+
 
 // Persistent UI settings snapshot
 struct UiSettings {
@@ -22,6 +24,7 @@ struct UiSettings {
 	int32_t vfoA;
 	int32_t vfoB;
 	int32_t ft8_offset;
+	uint8_t ft8_offset_enabled;
 	char ft8_testmsg[64];
 	char mycall[10];
 	char mygrid[8];
@@ -65,6 +68,7 @@ uint8_t ui_mode_to_si5351_rx_mode(UiMode mode);
 UiMode ui_get_mode();
 int32_t ui_get_vfo_freq();
 int32_t ui_get_ft8_offset();
+bool ui_get_ft8_offset_enabled();
 uint8_t ui_get_vfo_sel();
 
 bool ui_get_rit_active();

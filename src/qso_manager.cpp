@@ -1,5 +1,7 @@
 #include "qso_manager.h"
-
+#include "ft8_freq_opt.h"
+extern FT8FreqOptimizer ft8FreqOptimizer; // declared in main.cpp
+extern std::vector<FT8_TX::TxJob> txJobs; // declared in ft8_tx.cpp
 
 QSOManager::QSOManager() {}
 // ------------------------------------------------------------
@@ -141,7 +143,6 @@ String QSOManager::getAllQSOsJson() {
 
         o["isMine"] = q.is_mine;
         o["qso_id"] = q.qso_id;
-
         // ------------------------------------------------------------
         // LOG (debug history)
         // ------------------------------------------------------------
@@ -154,6 +155,23 @@ String QSOManager::getAllQSOsJson() {
             le["state"] = stateToString(q.log[i].state);
             le["msg"] = q.log[i].msg;
             le["rtx"] = q.log[i].rtx;
+        }
+
+        // ------------------------------------------------------------
+        // QUEUE (TX messages to be transmitted for this QSO, including retries)
+        // ------------------------------------------------------------
+        JsonArray queueArr = o["tx_queue"].to<JsonArray>();
+
+        for (FT8_TX::TxJob t : txJobs) {
+
+            if(t.qso_id != q.qso_id || t.cancelled) continue;
+            
+            JsonObject te = queueArr.add<JsonObject>();
+
+            te["ts"] = t.targetSlot;
+            te["msg"] = t.message;
+            te["retries"] = t.retryCount;
+            te["transmitting"] = t.transmitting;
         }
 
         uint8_t retries = ft8tx.getRetriesforQso(q.qso_id);
@@ -174,13 +192,31 @@ String QSOManager::getAllQSOsJson() {
     return out;
 }
 
+bool isRegion(const char *t) {
+    return strcmp(t, "EU") == 0 ||
+           strcmp(t, "NA") == 0 ||
+           strcmp(t, "SA") == 0 ||
+           strcmp(t, "AS") == 0 ||
+           strcmp(t, "AF") == 0 ||
+           strcmp(t, "OC") == 0 ||
+           strcmp(t, "JA") == 0;
+}
+
+bool isCQKeyword(const char *t) {
+    return strcmp(t, "DX") == 0 ||
+           strcmp(t, "TEST") == 0 ||
+           strcmp(t, "CONTEST") == 0;
+}
+
 // ------------------------------------------------------------
 // Robust message parser (NO fragile substring matching)
 // ------------------------------------------------------------
 QSOManager::Ft8MsgType QSOManager::parseMessage(const char *msg, QSOManager::Ft8Fields &out) {
     if (!msg) return MSG_UNKNOWN;
 
-    // Reset
+    // --------------------------------------------------------
+    // Reset output
+    // --------------------------------------------------------
     memset(&out, 0, sizeof(out));
     out.type = MSG_UNKNOWN;
 
@@ -188,44 +224,93 @@ QSOManager::Ft8MsgType QSOManager::parseMessage(const char *msg, QSOManager::Ft8
     strncpy(tmp, msg, sizeof(tmp) - 1);
     tmp[sizeof(tmp) - 1] = '\0';
 
-    char *tokens[5] = {0};
+    char *tokens[6] = {0};
     int ntok = 0;
 
+    // --------------------------------------------------------
     // Tokenize
+    // --------------------------------------------------------
     char *p = strtok(tmp, " ");
-    while (p && ntok < 5) {
+    while (p && ntok < 6) {
         tokens[ntok++] = p;
         p = strtok(nullptr, " ");
     }
 
     if (ntok == 0) return MSG_UNKNOWN;
 
-    // --------------------------------------------------------
-    // CQ
-    // --------------------------------------------------------
+    // ========================================================
+    // 1. CQ FAMILY (CQ, CQ DX, CQ REGION, CQ TEST)
+    // ========================================================
     if (strcmp(tokens[0], "CQ") == 0) {
 
-        if (ntok >= 2 && isCallsign(tokens[1])) {
-            safeCopy(out.call1, tokens[1], sizeof(out.call1));
+        int idx = 1;
+
+        bool isCQDX = false;
+        bool isCQTEST = false;
+        bool isCQREGION = false;
+
+        // ----------------------------------------------------
+        // CQ modifiers
+        // ----------------------------------------------------
+        if (ntok > 1) {
+            if (strcmp(tokens[1], "DX") == 0) {
+                isCQDX = true;
+                idx = 2;
+            }
+            else if (strcmp(tokens[1], "TEST") == 0 ||
+                     strcmp(tokens[1], "CONTEST") == 0) {
+                isCQTEST = true;
+                idx = 2;
+            }
+            else if (isRegion(tokens[1])) {
+                isCQREGION = true;
+                idx = 2;
+            }
+        }
+
+        // ----------------------------------------------------
+        // Optional callsign
+        // ----------------------------------------------------
+        if (ntok > idx && isCallsign(tokens[idx])) {
+            safeCopy(out.call1, tokens[idx], sizeof(out.call1));
             out.hasCall1 = true;
+            idx++;
         }
 
-        // CQ CALL GRID
-        if (ntok >= 3 && isGrid(tokens[2])) {
-            safeCopy(out.grid, tokens[2], sizeof(out.grid));
+        // ----------------------------------------------------
+        // Optional grid
+        // ----------------------------------------------------
+        if (ntok > idx && isGrid(tokens[idx])) {
+            safeCopy(out.grid, tokens[idx], sizeof(out.grid));
             out.hasGrid = true;
-
-            out.type = MSG_CQ;
-            return out.type;
         }
 
-        // CQ CALL  (no grid)
-        out.type = MSG_CQ_NO_GRID;
+        // ----------------------------------------------------
+        // Type classification
+        // ----------------------------------------------------
+        if (isCQDX) {
+            if (out.hasGrid) out.type = MSG_CQDX_GRID;
+            else if (out.hasCall1) out.type = MSG_CQDX;
+            else out.type = MSG_CQDX_ONLY;
+        }
+        else if (isCQTEST) {
+            out.type = MSG_CQ_TEST;
+        }
+        else if (isCQREGION) {
+            out.type = MSG_CQ_REGION;
+        }
+        else {
+            if (out.hasGrid) out.type = MSG_CQ_GRID;
+            else if (out.hasCall1) out.type = MSG_CQ;
+            else out.type = MSG_CQ_NO_GRID;
+        }
+
         return out.type;
     }
-    // --------------------------------------------------------
-    // CALL1 CALL2 ...
-    // --------------------------------------------------------
+
+    // ========================================================
+    // 2. TWO-CALLSIGN MESSAGES (QSO exchanges)
+    // ========================================================
     if (ntok >= 2) {
 
         if (isCallsign(tokens[0])) {
@@ -238,12 +323,15 @@ QSOManager::Ft8MsgType QSOManager::parseMessage(const char *msg, QSOManager::Ft8
             out.hasCall2 = true;
         }
     }
-    // --------------------------------------------------------
-    // Third token (type discriminator)
-    // --------------------------------------------------------
+
+    // ========================================================
+    // 3. THIRD TOKEN DISCRIMINATOR
+    // ========================================================
     if (ntok >= 3) {
 
-        // 73 / RR73
+        // ----------------------------------------------------
+        // End of QSO
+        // ----------------------------------------------------
         if (strcmp(tokens[2], "RR73") == 0) {
             out.type = MSG_RR73;
             return out.type;
@@ -254,43 +342,152 @@ QSOManager::Ft8MsgType QSOManager::parseMessage(const char *msg, QSOManager::Ft8
             return out.type;
         }
 
-        // Report
+        // ----------------------------------------------------
+        // Reports
+        // ----------------------------------------------------
         if (isReport(tokens[2])) {
             safeCopy(out.report, tokens[2], sizeof(out.report));
             out.hasReport = true;
 
-            if (tokens[2][0] == 'R') {
-                out.type = MSG_R_REPORT;
-            } else {
-                out.type = MSG_REPORT;
-            }
+            out.type = (tokens[2][0] == 'R') ? MSG_R_REPORT : MSG_REPORT;
             return out.type;
         }
 
-        // Grid (CALL message with locator)
+        // ----------------------------------------------------
+        // Grid in QSO
+        // ----------------------------------------------------
         if (isGrid(tokens[2])) {
             safeCopy(out.grid, tokens[2], sizeof(out.grid));
             out.hasGrid = true;
         }
     }
 
-    // --------------------------------------------------------
-    // Default
-    // --------------------------------------------------------
-    
+    // ========================================================
+    // 4. FINAL CLASSIFICATION
+    // ========================================================
     if (out.hasCall1 && out.hasCall2) {
-        if (out.hasGrid) {
-            out.type = MSG_CALL;              // CALL1 CALL2 GRID
-        } else {
-            out.type = MSG_CALL_NO_GRID;      // CALL1 CALL2
-        }
+        out.type = out.hasGrid ? MSG_CALL : MSG_CALL_NO_GRID;
     } else {
         out.type = MSG_UNKNOWN;
     }
 
-
     return out.type;
 }
+
+// QSOManager::Ft8MsgType QSOManager::parseMessage(const char *msg, QSOManager::Ft8Fields &out) {
+//     if (!msg) return MSG_UNKNOWN;
+
+//     // Reset
+//     memset(&out, 0, sizeof(out));
+//     out.type = MSG_UNKNOWN;
+
+//     char tmp[64];
+//     strncpy(tmp, msg, sizeof(tmp) - 1);
+//     tmp[sizeof(tmp) - 1] = '\0';
+
+//     char *tokens[5] = {0};
+//     int ntok = 0;
+
+//     // Tokenize
+//     char *p = strtok(tmp, " ");
+//     while (p && ntok < 5) {
+//         tokens[ntok++] = p;
+//         p = strtok(nullptr, " ");
+//     }
+
+//     if (ntok == 0) return MSG_UNKNOWN;
+
+//     // --------------------------------------------------------
+//     // CQ
+//     // --------------------------------------------------------
+//     if (strcmp(tokens[0], "CQ") == 0) {
+
+//         if (ntok >= 2 && isCallsign(tokens[1])) {
+//             safeCopy(out.call1, tokens[1], sizeof(out.call1));
+//             out.hasCall1 = true;
+//         }
+
+//         // CQ CALL GRID
+//         if (ntok >= 3 && isGrid(tokens[2])) {
+//             safeCopy(out.grid, tokens[2], sizeof(out.grid));
+//             out.hasGrid = true;
+
+//             out.type = MSG_CQ;
+//             return out.type;
+//         }
+
+//         // CQ CALL  (no grid)
+//         out.type = MSG_CQ_NO_GRID;
+//         return out.type;
+//     }
+//     // --------------------------------------------------------
+//     // CALL1 CALL2 ...
+//     // --------------------------------------------------------
+//     if (ntok >= 2) {
+
+//         if (isCallsign(tokens[0])) {
+//             safeCopy(out.call1, tokens[0], sizeof(out.call1));
+//             out.hasCall1 = true;
+//         }
+
+//         if (isCallsign(tokens[1])) {
+//             safeCopy(out.call2, tokens[1], sizeof(out.call2));
+//             out.hasCall2 = true;
+//         }
+//     }
+//     // --------------------------------------------------------
+//     // Third token (type discriminator)
+//     // --------------------------------------------------------
+//     if (ntok >= 3) {
+
+//         // 73 / RR73
+//         if (strcmp(tokens[2], "RR73") == 0) {
+//             out.type = MSG_RR73;
+//             return out.type;
+//         }
+
+//         if (strcmp(tokens[2], "73") == 0) {
+//             out.type = MSG_73;
+//             return out.type;
+//         }
+
+//         // Report
+//         if (isReport(tokens[2])) {
+//             safeCopy(out.report, tokens[2], sizeof(out.report));
+//             out.hasReport = true;
+
+//             if (tokens[2][0] == 'R') {
+//                 out.type = MSG_R_REPORT;
+//             } else {
+//                 out.type = MSG_REPORT;
+//             }
+//             return out.type;
+//         }
+
+//         // Grid (CALL message with locator)
+//         if (isGrid(tokens[2])) {
+//             safeCopy(out.grid, tokens[2], sizeof(out.grid));
+//             out.hasGrid = true;
+//         }
+//     }
+
+//     // --------------------------------------------------------
+//     // Default
+//     // --------------------------------------------------------
+    
+//     if (out.hasCall1 && out.hasCall2) {
+//         if (out.hasGrid) {
+//             out.type = MSG_CALL;              // CALL1 CALL2 GRID
+//         } else {
+//             out.type = MSG_CALL_NO_GRID;      // CALL1 CALL2
+//         }
+//     } else {
+//         out.type = MSG_UNKNOWN;
+//     }
+
+
+//     return out.type;
+// }
 
 String QSOManager::generateReply(Ft8MsgType type, const Ft8Fields &f, int snr_db) {
 
@@ -307,7 +504,10 @@ String QSOManager::generateReply(Ft8MsgType type, const Ft8Fields &f, int snr_db
     // --------------------------------------------------------
     // Determine if message is relevant to me
     // --------------------------------------------------------
-    bool isCQ = (type == MSG_CQ || type == MSG_CQ_NO_GRID);
+    bool isCQ = (type == MSG_CQ || type == MSG_CQ_NO_GRID || 
+                 type == MSG_CQ_GRID || type == MSG_CQDX  || 
+                 type == MSG_CQDX_GRID || type == MSG_CQDX_ONLY || 
+                 type == MSG_CQ_REGION || type == MSG_CQ_TEST);
 
     bool directedToMe = (call1 == myCall);
 
@@ -333,13 +533,15 @@ String QSOManager::generateReply(Ft8MsgType type, const Ft8Fields &f, int snr_db
     switch (type) {
 
         case MSG_CQ:
+        case MSG_CQ_NO_GRID:
+        case MSG_CQ_GRID:
+        case MSG_CQDX:
+        case MSG_CQDX_GRID:
+        case MSG_CQDX_ONLY:
+        case MSG_CQ_REGION:
+        case MSG_CQ_TEST:
             // CQ CALL GRID → CALL MYCALL GRID
             reply = call1 + " " + myCall + " " + myGrid;
-            break;
-
-        case MSG_CQ_NO_GRID:
-            // CQ CALL → CALL MYCALL
-            reply = call1 + " " + myCall;
             break;
 
         case MSG_CALL:
@@ -386,8 +588,15 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
 
     Ft8MsgType type = parseMessage(msg, f);              // parse the message and extract fields
 
+    time_t timestamp;
+    time(&timestamp);
+    f.ts = timestamp;
+
     // Discard my transmissions 
-    if(strcmp(f.call2, ui_get_mycall()) == 0){
+    // Serial.println("Check if it's my own transmission: " + String(msg) + " call1=" + String(f.call1) + " call2=" + String(f.call2) + " grid=" + String(f.grid) + " report=" + String(f.report) + " type=" + String(type) + " snr_db=" + String(s.snr_db));
+    if( (f.type <= MSG_CQ_TEST && strcmp(f.call1, ui_get_mycall()) == 0 ) ||
+                                strcmp(f.call2, ui_get_mycall()) == 0    )
+    {
         Serial.println("Decoded my own transmission. Discard it.");
         return; 
     }
@@ -396,11 +605,15 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
     if (type == MSG_UNKNOWN){ 
         Serial.println("Decoded message " + String(msg) + " with unknown type: " + String(type) + ". Ignoring it.");
         return;
-    };
+    }
+
+    // store the decoded fields in the ft8_frequency_optimizer for frequency optimization (CQ density tracking)
+    // Serial.println("Storing spot in ft8FreqOptimizer: freq=" + String(s.freq_hz) + " snr_db=" + String(s.snr_db) + " ts=" + String(f.ts) + " is_cq=" + String(f.is_cq) + " vfo_freq=" + String(ui_get_vfo_freq()));
+    ft8FreqOptimizer.store(s.freq_hz, s.snr_db, f.ts, f.is_cq, ui_get_vfo_freq());
 
     // generate the appropriate reply message based on the message type and extracted fields
     String reply = "";  
-    if(type == MSG_CQ || type == MSG_CQ_NO_GRID || strcmp(f.call1, ui_get_mycall()) == 0 ){
+    if(type <= MSG_CQ_TEST || strcmp(f.call1, ui_get_mycall()) == 0 ){
         reply = generateReply(type, f, s.snr_db);     
         // Serial.println("Decoded message: " + String(msg) + " type=" + String(type) + " call1=" + String(f.call1) + " call2=" + String(f.call2) + " grid=" + String(f.grid) + " report=" + String(f.report) + ". Generated reply: " + reply);
     }
@@ -420,7 +633,10 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
     
         Serial.printf("Adding log entry to qso_id: %d for message involving me: %s call1=%s call2=%s type=%d QSO state is %d. Generated reply: %s\r\n", q->qso_id, msg, f.call1, f.call2, type, q->state, reply.c_str());
         addLog(q, 'R', timestamp, q->state, msg);
-    }else if(type == MSG_CQ || type == MSG_CQ_NO_GRID){
+
+
+        
+    }else if(type <= MSG_CQ_TEST){
         
         time_t timestamp;
         time(&timestamp);
@@ -429,7 +645,7 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
         addLog(q, 'R', timestamp, q->state, msg);
     }
     
-    if( (type == MSG_CQ || type == MSG_CQ_NO_GRID) && strlen(q->reply) == 0 ){
+    if( (type <= MSG_CQ_TEST) && strlen(q->reply) == 0 ){
         Serial.println("addOrUpdate output without reply: " + String(msg) + " q.firstseen=" + String(q->firstSeen) + " q.lastHeard=" + String(q->lastHeard) + " cared=" + String(q->cared) + " call1=" + String(q->call1) + " call2=" + String(q->call2)  + ". QSO state is " + String(q->state) + ". Generated reply: " + q->reply);   
     }    
 
@@ -513,8 +729,8 @@ QSOManager::QSO * QSOManager::addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_
         q.firstSeen = timestamp;
         q.lastHeard = timestamp;
 
-        q.cq = (type == MSG_CQ);
-        q.state = (type == MSG_CQ || type == MSG_CQ_NO_GRID) ? QSO_CQ : QSO_CALLING;
+        q.cq = (type <= MSG_CQ_TEST);
+        q.state = (type <= MSG_CQ_TEST) ? QSO_CQ : QSO_CALLING;
 
         q.qso_id = next_qso_id++;
 
@@ -522,6 +738,12 @@ QSOManager::QSO * QSOManager::addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_
         switch(type) {
             case MSG_CQ:
             case MSG_CQ_NO_GRID:
+            case MSG_CQ_GRID:
+            case MSG_CQDX:
+            case MSG_CQDX_GRID:
+            case MSG_CQDX_ONLY:
+            case MSG_CQ_REGION:
+            case MSG_CQ_TEST:
                 q.cared[0] = 'C';
                 break;
             case MSG_CALL:
@@ -550,7 +772,7 @@ QSOManager::QSO * QSOManager::addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_
     // --------------------------------------------------------
     qso->lastHeard = timestamp;
 
-    if (type == MSG_CQ || type == MSG_CQ_NO_GRID)
+    if (type <= MSG_CQ_TEST)
         qso->cq = true;
 
     // --------------------------------------------------------
@@ -569,7 +791,7 @@ QSOManager::QSO * QSOManager::addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_
     // GRID (directional)
     // --------------------------------------------------------
     if (f.hasGrid){
-        if(type==MSG_CQ || type==MSG_CQ_NO_GRID)
+        if(type <= MSG_CQ_TEST)
             safeCopy(qso->grid1, f.grid, sizeof(qso->grid1));
         else
             safeCopy(qso->grid2, f.grid, sizeof(qso->grid2));
@@ -579,7 +801,7 @@ QSOManager::QSO * QSOManager::addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_
     // SNR (directional)
     // --------------------------------------------------------
     if (snr_db != INT8_MIN) {
-        if(type==MSG_CQ || type==MSG_CQ_NO_GRID){
+        if(type <= MSG_CQ_TEST){
             qso->snr1 = snr_db;
         } else {
             if (strcmp(f.call2, qso->call1) == 0)
@@ -608,6 +830,12 @@ QSOManager::QSO * QSOManager::addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_
 
         case MSG_CQ:
         case MSG_CQ_NO_GRID:
+        case MSG_CQ_GRID:
+        case MSG_CQDX:
+        case MSG_CQDX_GRID:
+        case MSG_CQDX_ONLY:
+        case MSG_CQ_REGION:
+        case MSG_CQ_TEST:
             //qso->state = QSO_CQ;
             break;
 
@@ -639,6 +867,12 @@ QSOManager::QSO * QSOManager::addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_
     switch(type) {
         case MSG_CQ:
         case MSG_CQ_NO_GRID:
+        case MSG_CQ_GRID:
+        case MSG_CQDX:
+        case MSG_CQDX_GRID:
+        case MSG_CQDX_ONLY:
+        case MSG_CQ_REGION:
+        case MSG_CQ_TEST:
             qso->cared[0] = 'C';
             break;
         case MSG_CALL:
@@ -667,7 +901,7 @@ QSOManager::QSO * QSOManager::addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_
         safeCopy(qso->reply, reply.c_str(), sizeof(qso->reply));
 
     // reduce the list size if needed (remove oldest non-"mine" first)
-    if (qso_list.size() >= 100) {
+    if (qso_list.size() >= QSO_LIST_MAX) {
 
         bool removed = false;
 
