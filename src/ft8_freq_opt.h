@@ -10,7 +10,8 @@ public:
     void clear();
 
     // Store a JSON spot
-    void store(const char *json);
+    // void store(const char *json, uint32_t current_base_freq_hz);
+    void store(uint32_t freq, int snr, uint32_t ts, bool is_cq, uint32_t current_base_freq_hz) ;
 
     // Compute the best FT8 audio offset (Hz)
     // collision_prediction: avoid next-frame transmitters
@@ -20,6 +21,9 @@ public:
     static constexpr int MIN_HZ = 100;
     static constexpr int MAX_HZ = 3000;
     static constexpr float BIN_HZ = 6.25f;
+    static constexpr int SMOOTH_RADIUS = int(50.0f / BIN_HZ); // ~50 Hz FT8 width
+    static constexpr int GUARD_RADIUS = int(30.0f / BIN_HZ);
+
     static constexpr int NUM_BINS = int((MAX_HZ - MIN_HZ) / BIN_HZ + 0.5f);
     float activity[NUM_BINS];
     uint16_t bin_to_hz(int bin) const;
@@ -30,6 +34,9 @@ private:
 
     static constexpr int SPREAD_BINS = 4;
     static constexpr float DECAY_SEC = 30.0f;
+
+    uint32_t cq_last_update[NUM_BINS];
+    float decayed[NUM_BINS];
 
     uint32_t current_base_freq;
 
