@@ -54,6 +54,9 @@
 
 #define GPIO_TX         18  // Switch the relay to TX mode. High=TX Low=RX
 
+#define QSO_LIST_MAX 100 // Maximum number of QSOs to track in memory
+
+
 // IQ ADC sampling configuration (ESP32)
 // main.ori uses a 62.5kHz timer ISR and alternates I/Q each tick, i.e. ~31.25kS/s per channel.
 
