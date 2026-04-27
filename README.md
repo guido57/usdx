@@ -92,15 +92,16 @@ loop():
 ### 8️⃣ ESP32-N16R8 memory partitioning
 I adopted a custom partitioning as you can see in my  mypartitions.csv
 
+```text
  Name,   Type, SubType, Offset,   Size, Flags
- 
 nvs,      data, nvs,      0x9000,   0x5000,
 otadata,  data, ota,      0xe000,   0x2000,
 app0,     app,  ota_0,    0x10000,  0x300000,   
 app1,     app,  ota_1,    0x310000, 0x300000,   
-**logs,     data, spiffs,   0x610000, 0x200000,**   
-**spiffs,   data, spiffs,   0x810000, 0x200000,**   
+logs,     data, spiffs,   0x610000, 0x200000,   
+spiffs,   data, spiffs,   0x810000, 0x200000,   
 coredump, data, coredump, 0xA10000, 0x20000,
+```
 
 I halved "data" into "logs" and "spiffs", both with a length of 0x200000 bytes:
 - logs is read/written by the program (see qsostats.cpp) to persist QSO scoring but **it is not overwritten when I run 'pio run --target uploadfs'**
