@@ -72,7 +72,7 @@ loop():
 
 ### 6️⃣ Hardware Requirements
 
-- ESP32 (any ESP32 variant should work)
+- ESP32 (any ESP32 variant with enough flash should work). I used ESP32-S3 N16R8 i.e. 16MB Flash, 8MB PSRAM
 - PCM1808 ADC
 - MAX98357 DAC (I2S audio)
 - SI5351 frequency synthesizer
@@ -86,7 +86,7 @@ loop():
 - Wi-Fi streaming allows network SDR operation
 - Built-in calibration tools for IQ imbalance and clipping detection
 
-### 7️⃣ ESP32-N16R8 memory partitioning
+### 8️⃣ ESP32-N16R8 memory partitioning
 I adopted a custom partitioning as you can see in my  mypartitions.csv
 
  Name,   Type, SubType, Offset,   Size, Flags
