@@ -100,7 +100,7 @@ app1,     app,  ota_1,    0x310000, 0x300000,
 coredump, data, coredump, 0xA10000, 0x20000,
 
 I halved "data" into "logs" and "spiffs", both with a length of 0x200000 bytes:
-- logs is read/written by the program (see qsostats.cpp) to persist QSO scoring but it is not overwritten when I run 'pio run --target uploadfs'
+- logs is read/written by the program (see qsostats.cpp) to persist QSO scoring but **it is not overwritten when I run 'pio run --target uploadfs'**
 - spiffs contains all the files for the web server (index.html, app.js and so on), it is written with all the files contained in /data using 'pio run --target uploadfs' and it is read (only) by the program   
 
 
