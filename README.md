@@ -59,7 +59,10 @@ PCM1808 ADC → CIC Decimator → DC Removal → IQ Calibration → Demodulator 
 
 - Integrated **FT8 TX engine**
 - Frequency optimization to avoid interferences
-- Works alongside SDR receiver
+- For FT8 decoding, it continuosly streams audio to an external server where a python program:
+  - receives audio
+  - every 15 seconds runs a command line FT8 decoder (the same used by WSJT-X) to obtain the decoded messages
+  - sends back decoded messages to the ESP32
 
 ### 5️⃣ Main Loop Execution
 
@@ -109,4 +112,7 @@ I halved "data" into "logs" and "spiffs", both with a length of 0x200000 bytes:
 - logs is read/written by the program (see qsostats.cpp) to persist QSO scoring but **it is not overwritten when I run 'pio run --target uploadfs'**
 - spiffs contains all the files for the web server (index.html, app.js and so on), it is written with all the files contained in /data using 'pio run --target uploadfs' and it is read (only) by the program   
 
+## Web User Interface
+
+![](https://cdn.hackaday.io/images/1838451778835183107.png)
 
