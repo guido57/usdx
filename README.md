@@ -116,3 +116,9 @@ I halved "data" into "logs" and "spiffs", both with a length of 0x200000 bytes:
 
 ![](https://cdn.hackaday.io/images/1838451778835183107.png)
 
+- answer a CQ double clicking a row
+- follow the evolution of your or other QSOs 
+- make a CQ or any other manual FT8 message
+- set or disable the automatic frequency offset
+- change the FT8 band (160, 80, 60, 40, 30, 20, 15, 10 meters)
+
