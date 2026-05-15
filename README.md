@@ -24,7 +24,7 @@ This project implements a full **IQ SDR receiver** and **FT8 transceiver** on an
 
 ## Architecture Overview
 
-![](https://cdn.hackaday.io/images/1437141774639937146.png)
+![](https://cdn.hackaday.io/images/2677411778833313819.png)
 
 
 ### 1️⃣ RF Front-End
