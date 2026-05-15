@@ -16,7 +16,8 @@ This project implements a full **IQ SDR receiver** and **FT8 transceiver** on an
 - IQ amplitude/phase calibration
 - Selectable audio filters and **AGC**
 - Volume control and RIT support
-- **Network audio streaming** over Wi-Fi (websocket)
+- **Network audio streaming** (websocket) over Wi-Fi or Ethernet
+- ** Web Server ** for remote operations over Wi-Fi or Ethernet
 - Automatic **antenna filter selection** via MCP23017 GPIO
 - **FT8 TX and RX support** with frequency optimization
 
@@ -57,7 +58,7 @@ PCM1808 ADC → CIC Decimator → DC Removal → IQ Calibration → Demodulator 
 ### 4️⃣ FT8 Subsystem
 
 - Integrated **FT8 TX engine**
-- Frequency optimization to avoid interference
+- Frequency optimization to avoid interferences
 - Works alongside SDR receiver
 
 ### 5️⃣ Main Loop Execution
@@ -81,6 +82,7 @@ loop():
 - SI5351 frequency synthesizer
 - MCP23017 for antenna relay switching
 - Tayloe / QSD or other IQ front-end
+- W5500 (optional) for Ethernet
 
 ### 7️⃣ Performance Notes
 
