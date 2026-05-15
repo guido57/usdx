@@ -17,7 +17,7 @@ This project implements a full **IQ SDR receiver** and **FT8 transceiver** on an
 - Selectable audio filters and **AGC**
 - Volume control and RIT support
 - **Network audio streaming** (websocket) over Wi-Fi or Ethernet
-- ** Web Server ** for remote operations over Wi-Fi or Ethernet
+- **Web Server** for remote operations over Wi-Fi or Ethernet
 - Automatic **antenna filter selection** via MCP23017 GPIO
 - **FT8 TX and RX support** with frequency optimization
 
