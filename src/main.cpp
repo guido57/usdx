@@ -23,6 +23,7 @@
 #include "pwrswrmeter.h"
 #include "qsostats.h"
 #include "adif.h"
+#include "ft8_decoder.h"
   
 static SI5351 si5351;
 FT8_TX ft8tx(si5351);
@@ -48,6 +49,21 @@ static DemodMode ui_mode_to_demod_mode(UiMode mode) {
     case UI_CW:  return DEMOD_USB; // CW uses USB demod + tone offset
     default:     return DEMOD_USB;
   }
+}
+
+// ===============================
+// FT8 Decoder Buffer
+// ===============================
+#define FT8_DECODER_BUFFER_SIZE 256
+static int16_t ft8_sample_buffer[FT8_DECODER_BUFFER_SIZE];
+static uint16_t ft8_sample_idx = 0;
+
+static void ft8_decoder_add_sample(int16_t sample) {
+    ft8_sample_buffer[ft8_sample_idx++] = sample;
+    if (ft8_sample_idx >= FT8_DECODER_BUFFER_SIZE) {
+        ft8_decoder_add_samples(ft8_sample_buffer, FT8_DECODER_BUFFER_SIZE);
+        ft8_sample_idx = 0;
+    }
 }
 
 // ===============================
@@ -379,6 +395,9 @@ static void processAudioPCM1808_simulatedIQ() {
             }
 
             int16_t audioSample = demod_process(iDecimated, qDecimated, demodMode);
+
+            // Feed audio to FT8 decoder
+            ft8_decoder_add_sample(audioSample);
 
             wifi_config_audio_push(lastSynth.vfoHz, 16 * audioSample);
 
@@ -1088,6 +1107,9 @@ void setup() {
   qsoStats.begin();
   qsoStats.loadCTYFromFile("/cty_extended.dat");
 
+  Serial.printf("Initialize FT8 decoder.\r\n");
+  ft8_decoder_init();
+
   setup_done = true;
 
 }
@@ -1158,6 +1180,22 @@ void loop() {
   processAudioPCM1808();
   // processAudioPCM1808_simulatedIQ();
   audioTimeTotal += micros() - start;
+
+  // ------------- FT8 Decoder ---------------
+  // Process decoder periodically (check for completed slots)
+  static uint32_t lastDecoderCheck = 0;
+  uint32_t now = millis();
+  if (now - lastDecoderCheck >= 100) {  // Check every 100ms
+    if (ft8_decoder_process()) {
+      // Decoder found messages in this slot
+      const ft8_decoded_msg_t* msg = ft8_decoder_get_last_message();
+      if (msg && msg->valid) {
+        Serial.printf("[FT8] SNR:%.1f dB  Freq:%.1f Hz  Message: %s\n", 
+                      msg->snr, msg->freq, msg->message);
+      }
+    }
+    lastDecoderCheck = now;
+  }
 
   cycles++;
 
