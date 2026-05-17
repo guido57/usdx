@@ -157,6 +157,7 @@ th {
   background: #f0f0f0;
   position: sticky;
   top: 0;
+  
 }
 
 /* Row hover */
@@ -213,4 +214,29 @@ tr:hover {
   0%   { background-color: #ff4d4d; }
   50%  { background-color: #ff9999; }
   100% { background-color: #ff4d4d; }
+}
+
+/* Sorting indicators */
+
+th.sortable {
+  cursor: pointer;
+  padding-right: 18px;
+}
+
+th.sortable::after {
+  position: absolute;
+  right: 6px;
+  opacity: 0.4;
+}
+
+/* ascending */
+th.sort-asc::after {
+  content: "▲";
+  opacity: 1;
+}
+
+/* descending */
+th.sort-desc::after {
+  content: "▼";
+  opacity: 1;
 }

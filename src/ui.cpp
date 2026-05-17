@@ -29,6 +29,7 @@ static bool ft8_offset_enabled = false;
 static char ft8_testmsg[64] = ""; // FT8 test message
 static char mycall[10] = ""; // my callsign
 static char mygrid[8] = ""; // my grid locator
+static char qrz_key[20] = ""; 
 
 
 static const uint8_t N_BANDS = 10;
@@ -111,6 +112,7 @@ int8_t ui_get_volume() { return volume; }
 char * ui_get_mycall() { return mycall; }
 char * ui_get_mygrid() { return mygrid; } 
 char * ui_get_ft8_testmsg() { return ft8_testmsg; }
+char * ui_get_qrz_key() { return qrz_key; }
 
 
 // Menu handling
@@ -186,6 +188,7 @@ static void loadSettings() {
   ft8_offset = constrain(s.ft8_offset, 0, 3000);
   ft8_offset_enabled = (s.ft8_offset_enabled != 0);
   strlcpy(ft8_testmsg, s.ft8_testmsg, sizeof(ft8_testmsg));
+  strlcpy(qrz_key, s.qrz_key, sizeof(qrz_key));
   strlcpy(mycall, s.mycall, sizeof(mycall));
   strlcpy(mygrid, s.mygrid, sizeof(mygrid));
   bandval = constrain(s.bandval, 0, (int32_t)N_BANDS - 1);
@@ -235,6 +238,7 @@ bool ui_get_settings(UiSettings* out) {
   out->ft8_offset = ft8_offset;
   out->ft8_offset_enabled = ft8_offset_enabled ? 1 : 0;
   strlcpy(out->ft8_testmsg, ft8_testmsg, sizeof(out->ft8_testmsg));
+  strlcpy(out->qrz_key, qrz_key, sizeof(out->qrz_key));
   strlcpy(out->mycall, mycall, sizeof(out->mycall));
   strlcpy(out->mygrid, mygrid, sizeof(out->mygrid));
   out->rit = rit;
@@ -271,6 +275,7 @@ void ui_apply_settings(const UiSettings& s) {
   ft8_offset = constrain(s.ft8_offset, 0, 3000);
   ft8_offset_enabled = (s.ft8_offset_enabled != 0);
   strlcpy(ft8_testmsg, s.ft8_testmsg, sizeof(ft8_testmsg));
+  strlcpy(qrz_key, s.qrz_key, sizeof(qrz_key));
   strlcpy(mycall, s.mycall, sizeof(mycall));
   strlcpy(mygrid, s.mygrid, sizeof(mygrid));
   bandval = constrain(s.bandval, 0, (int32_t)N_BANDS - 1);
@@ -323,10 +328,11 @@ static void saveSettings() {
   s.ft8_offset = ft8_offset;
   s.ft8_offset_enabled = ft8_offset_enabled ? 1 : 0;
   strlcpy(s.ft8_testmsg, ft8_testmsg, sizeof(s.ft8_testmsg));
+  strlcpy(s.qrz_key, qrz_key, sizeof(s.qrz_key));
   strlcpy(s.mycall, mycall, sizeof(s.mycall));
   strlcpy(s.mygrid, mygrid, sizeof(s.mygrid));
   s.bandval = bandval;
-  Serial.printf("Saving settings: vfoA=%u, vfoB=%u, vfoSel=%u, mode=%u, bandval=%u\n", s.vfoA, s.vfoB, s.vfoSel, s.mode, s.bandval);
+  // Serial.printf("Saving settings: vfoA=%u, vfoB=%u, vfoSel=%u, mode=%u, bandval=%u\n", s.vfoA, s.vfoB, s.vfoSel, s.mode, s.bandval);
   s.rit = rit;
   s.ritActive = ritActive ? 1 : 0;
   s.volume = volume;

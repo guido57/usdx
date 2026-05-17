@@ -2,14 +2,15 @@
 
 #include <Arduino.h>
 #include <si5351.h>
+#include "qso_manager.h"
 
 class FT8_TX {
 public:
-
     
     struct TxRequest {
         uint32_t baseFreq;
         char message[64];
+        Ft8MsgType msgType; // for stats and retry logic
         uint8_t parity;     // 0,1 or 255 = next available
         uint32_t qso_id;
     };
@@ -17,8 +18,8 @@ public:
     struct TxJob {
         uint32_t id;
         int qso_id;              // -1 for CQ or generic
-
         char message[64];
+        Ft8MsgType msgType; // for stats and retry logic
 
         uint8_t parity;          // 0,1 or 255 = any
         uint32_t baseFreq;
@@ -40,12 +41,13 @@ public:
     // uint32_t scheduledSlotStart = 0;
 
     TxJob makeJobFromRequest(const TxRequest& req, int64_t absoluteSlot);
-    void cancelJobsForQso(int qso_id);
+    void cancelJobsForQso(int qso_id); // cancel all jobs for a given QSO 
     uint8_t getRetriesforQso(int qso_id);
+    TxJob * getNextPendingJob(int qso_id);
 
     
     // Ask to send an FT8 message in next slot
-    bool requestTransmission(uint32_t baseFreqHz, const char *msg, uint8_t parity, uint32_t qso_id);
+    bool requestTransmission(uint32_t baseFreqHz, const char *msg, Ft8MsgType msgType, uint8_t parity, uint32_t qso_id);
     bool cancelRequestTransmission(uint32_t qso_id);
 
 

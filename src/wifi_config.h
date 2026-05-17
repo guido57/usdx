@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "adif.h"
 
 // Initialize WiFi in STA mode (using saved credentials) or fallback to AP mode.
 void wifi_config_setup();
@@ -10,6 +11,9 @@ void wifi_config_loop();
 
 // Stream audio sample (16-bit PCM @ 8kHz) to WebSocket clients.
 void wifi_config_audio_push(int32_t freq_hz, int16_t sample);
+
+// Stream ADIF text to WebSocket server
+void wifi_config_adif_push(AdifUploadItem adif);
 
 
 // ===== FT8 =====

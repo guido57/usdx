@@ -50,7 +50,7 @@ public:
   //volatile uint32_t _mod;
   volatile uint8_t pll_regs[8];
   volatile uint8_t _i2c_error = 0;
-  volatile uint8_t drive_strength = 0; // 0=2mA, 1=4mA, 2=6mA, 3=8mA
+  volatile uint8_t drive_strength = 3; // 0=2mA, 1=4mA, 2=6mA, 3=8mA
 
   inline uint8_t i2cError() const { return _i2c_error; }
   inline void clearI2cError() { _i2c_error = 0; }

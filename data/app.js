@@ -11,7 +11,7 @@ let ctyData = [];
 let prefixMap = [];
 
 async function loadCtyDat() {
-  const resp = await fetch('/cty.dat');
+  const resp = await fetch('/cty_extended.dat');
   const text = await resp.text();
   parseCtyDat(text);
 }
@@ -30,23 +30,21 @@ function parseCtyDat(text) {
     // normalize spaces
     block = block.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ');
 
-    // find FIRST colon (after country)
-    const firstColon = block.indexOf(':');
-    if (firstColon === -1) continue;
+    // Prefixes are after the last colon in each CTY block.
+    const lastColon = block.lastIndexOf(':');
+    if (lastColon === -1) continue;
 
-    const country = block.substring(0, firstColon).trim();
+    const headerPart = block.substring(0, lastColon);
+    const headerFields = headerPart.split(':').map(s => s.trim());
+    if (headerFields.length < 2) continue;
 
-    // find SECOND colon (after dxcc)
-    const secondColon = block.indexOf(':', firstColon + 1);
-    if (secondColon === -1) continue;
+    const country = headerFields[0];
 
-    const dxccStr = block.substring(firstColon + 1, secondColon).trim();
+    // Extended format: Country:CQ:ITU:Cont:Lon:Lat:Offset:Prefix:DXCC
+    // Legacy fallback (if needed): Country:CQ:...
+    const dxccStr = headerFields.length >= 9 ? headerFields[8] : headerFields[1];
     const dxcc = parseInt(dxccStr, 10);
     if (isNaN(dxcc)) continue;
-
-    // 🔥 KEY PART: prefixes are AFTER THE LAST COLON
-    const lastColon = block.lastIndexOf(':');
-    if (lastColon === -1 || lastColon <= secondColon) continue;
 
     const prefixPart = block.substring(lastColon + 1);
 
@@ -279,7 +277,6 @@ const countryToISO = {
   "Samoa": "ws",
 
   // ===== SPECIAL / HAM RADIO COMMON =====
-  "European Russia": "ru",
   "Asiatic Russia": "ru",
   "EU Russia": "ru",
   "AS Russia": "ru",
@@ -289,41 +286,27 @@ const countryToISO = {
   "Lebanon": "lb",
   "Syria": "sy",
   "Palestine": "ps",
-  "Iraq": "iq",
-  "Iran": "ir",
   "Yemen": "ye",
   "Jordan": "jo",
 
   "Hong Kong": "hk",
   "Macau": "mo",
 
-  "Canary Islands": "es",
-  "Balearic Islands": "es",
-
   "Madeira Islands": "pt",
   "Azores": "pt",
   
-  "United Kingdom": "gb",
-  "England": "gb",
-  "Scotland": "gb",
-  "Wales": "gb",
   "Northern Ireland": "gb",
-
-  "USA": "us",
-  "United States": "us",
 
   "Kaliningrad": "ru",
   "Kaliningrad (European Russia)": "ru",
 
   "Federal Republic of Germany": "de",
   "Fed. Rep. of Germany": "de",
-  "Germany": "de",
 
   "Djibouti": "dj",
 
   "Asiatic Turkey": "tr",
   "European Turkey": "tr",
-  "Turkey": "tr",
 
 "Republic of the Congo": "cg",
 "Congo": "cg",
@@ -337,11 +320,9 @@ const countryToISO = {
 
 "Bangladesh": "bd",
 
-"Bosnia and Herzegovina": "ba",
 "Bosnia-Herzegovina": "ba",
 
 "Slovak Republic": "sk",
-"Slovakia": "sk",
 
 "Sicily": "it",          // ISO Italy, DXCC IT9 special case
 "Guantanamo Bay": "cu",  // territory mapping
@@ -351,10 +332,8 @@ const countryToISO = {
 "Georgia": "ge",
 
 "Macedonia": "mk",
-"North Macedonia": "mk",
 "Kyrgyzstan": "kg",
 "Central African Republic": "cf",
-"Croatia": "hr",
 "Malawi": "mw",
 "Guadeloupe": "gp",
 "Cayman Islands": "ky",
@@ -369,6 +348,212 @@ const countryToISO = {
 "Aruba": "aw",
 "Armenia": "am",
 "Liberia": "lr",
+
+  // CTY extended coverage additions
+"Afghanistan": "af",
+"African Italy": "it",
+"Agalega & St. Brandon": "mu",
+"Aland Islands": "ax",
+"Alaska": "us",
+"American Samoa": "as",
+"Amsterdam & St. Paul Is.": "tf",
+"Andaman & Nicobar Is.": "in",
+"Angola": "ao",
+"Anguilla": "ai",
+"Annobon Island": "gq",
+"Antarctica": "aq",
+"Antigua & Barbuda": "ag",
+"Ascension Island": "sh",
+"Auckland & Campbell Is.": "nz",
+"Austral Islands": "pf",
+"Aves Island": "ve",
+"Azerbaijan": "az",
+"Baker & Howland Islands": "um",
+"Banaba Island": "ki",
+"Barbados": "bb",
+"Bear Island": "sj",
+"Belize": "bz",
+"Bermuda": "bm",
+"Bhutan": "bt",
+"Bonaire": "bq",
+"Botswana": "bw",
+"Bouvet": "bv",
+"British Virgin Islands": "vg",
+"Brunei Darussalam": "bn",
+"Burkina Faso": "bf",
+"Burundi": "bi",
+"Cambodia": "kh",
+"Cameroon": "cm",
+"Cape Verde": "cv",
+"Central Kiribati": "ki",
+"Ceuta & Melilla": "es",
+"Chad": "td",
+"Chagos Islands": "io",
+"Chatham Islands": "nz",
+"Chesterfield Islands": "nc",
+"Christmas Island": "cx",
+"Clipperton Island": "fr",
+"Cocos (Keeling) Islands": "cc",
+"Cocos Island": "cr",
+"Comoros": "km",
+"Conway Reef": "fj",
+"Costa Rica": "cr",
+"Cote d'Ivoire": "ci",
+"Crozet Island": "tf",
+"Curacao": "cw",
+"DPR of Korea": "kp",
+"Dem. Rep. of the Congo": "cd",
+"Desecheo Island": "pr",
+"Dodecanese": "gr",
+"Dominica": "dm",
+"Ducie Island": "pn",
+"East Malaysia": "my",
+"Easter Island": "cl",
+"Eastern Kiribati": "ki",
+"El Salvador": "sv",
+"Equatorial Guinea": "gq",
+"Eritrea": "er",
+"Falkland Islands": "fk",
+"Faroe Islands": "fo",
+"Fernando de Noronha": "br",
+"Franz Josef Land": "ru",
+"French Guiana": "gf",
+"French Polynesia": "pf",
+"Gabon": "ga",
+"Galapagos Islands": "ec",
+"Gibraltar": "gi",
+"Glorioso Islands": "tf",
+"Greenland": "gl",
+"Grenada": "gd",
+"Guatemala": "gt",
+"Guernsey": "gg",
+"Guinea": "gn",
+"Guinea-Bissau": "gw",
+"Guyana": "gy",
+"Hawaii": "us",
+"Heard Island": "hm",
+"Honduras": "hn",
+"ITU HQ": "ch",
+"Isle of Man": "im",
+"Jan Mayen": "sj",
+"Jersey": "je",
+"Johnston Island": "um",
+"Juan Fernandez Islands": "cl",
+"Juan de Nova, Europa": "tf",
+"Kerguelen Islands": "tf",
+"Kermadec Islands": "nz",
+"Kingman Reef": "um",
+"Kure Island": "um",
+"Kuwait": "kw",
+"Lakshadweep Islands": "in",
+"Laos": "la",
+"Lesotho": "ls",
+"Lord Howe Island": "au",
+"Macao": "mo",
+"Macquarie Island": "au",
+"Madagascar": "mg",
+"Maldives": "mv",
+"Mali": "ml",
+"Malpelo Island": "co",
+"Mariana Islands": "mp",
+"Market Reef": "fi",
+"Marquesas Islands": "pf",
+"Marshall Islands": "mh",
+"Mauritania": "mr",
+"Mauritius": "mu",
+"Mayotte": "yt",
+"Mellish Reef": "au",
+"Micronesia": "fm",
+"Midway Island": "um",
+"Minami Torishima": "jp",
+"Montenegro": "me",
+"Montserrat": "ms",
+"Mount Athos": "gr",
+"Mozambique": "mz",
+"Myanmar": "mm",
+"Nauru": "nr",
+"Navassa Island": "um",
+"Nepal": "np",
+"New Caledonia": "nc",
+"Nicaragua": "ni",
+"Niger": "ne",
+"Niue": "nu",
+"Norfolk Island": "nf",
+"North Cook Islands": "ck",
+"Ogasawara": "jp",
+"Palau": "pw",
+"Palmyra & Jarvis Islands": "um",
+"Panama": "pa",
+"Peter 1 Island": "aq",
+"Pitcairn Island": "pn",
+"Pr. Edward & Marion Is.": "za",
+"Pratas Island": "tw",
+"Republic of Korea": "kr",
+"Republic of South Sudan": "ss",
+"Reunion Island": "re",
+"Revillagigedo": "mx",
+"Rodriguez Island": "mu",
+"Rotuma Island": "fj",
+"Rwanda": "rw",
+"Saba & St. Eustatius": "bq",
+"Sable Island": "ca",
+"San Andres & Providencia": "co",
+"San Felix & San Ambrosio": "cl",
+"Sao Tome & Principe": "st",
+"Scarborough Reef": "ph",
+"Senegal": "sn",
+"Seychelles": "sc",
+"Shetland and Fair Isle": "gb",
+"Sierra Leone": "sl",
+"Sint Maarten": "sx",
+"Somalia": "so",
+"South Cook Islands": "ck",
+"South Georgia Island": "gs",
+"South Orkney Islands": "aq",
+"South Sandwich Islands": "gs",
+"South Shetland Islands": "aq",
+"Sov Mil Order of Malta": "mt",
+"Spratly Islands": "ph",
+"St. Barthelemy": "bl",
+"St. Helena": "sh",
+"St. Kitts & Nevis": "kn",
+"St. Lucia": "lc",
+"St. Martin": "mf",
+"St. Paul Island": "ca",
+"St. Peter & St. Paul": "br",
+"St. Pierre & Miquelon": "pm",
+"St. Vincent": "vc",
+"Suriname": "sr",
+"Svalbard": "sj",
+"Swains Island": "as",
+"Swaziland": "sz",
+"Tajikistan": "tj",
+"Temotu Province": "sb",
+"The Gambia": "gm",
+"Timor - Leste": "tl",
+"Togo": "tg",
+"Tokelau Islands": "tk",
+"Tonga": "to",
+"Trindade & Martim Vaz": "br",
+"Trinidad & Tobago": "tt",
+"Tristan da Cunha & Gough": "sh",
+"Tromelin Island": "tf",
+"Turkmenistan": "tm",
+"Turks & Caicos Islands": "tc",
+"Tuvalu": "tv",
+"UK Base Areas on Cyprus": "gb",
+"US Virgin Islands": "vi",
+"United Nations HQ": "us",
+"Uzbekistan": "uz",
+"Vienna Intl Ctr": "at",
+"Wake Island": "um",
+"Wallis & Futuna Islands": "wf",
+"West Malaysia": "my",
+"Western Kiribati": "ki",
+"Western Sahara": "eh",
+"Willis Island": "au",
+"Zambia": "zm",
+"Zimbabwe": "zw",
 
 };
 
@@ -393,7 +578,7 @@ function getCountryFromCallsign(cs) {
         dxcc: entry.dxcc
       }
     : {
-        country: 'Unknown',
+        country: '',
         dxcc: null
       };
 
@@ -904,14 +1089,16 @@ function addQsoRow(qso){
       <td>${geo1.country || ''}</td>
       <td>${geo1.flag}</td>
       <td>${qso.snr1 === -128 ? '' : qso.snr1}</td>
+      <td>${qso.report1 || ''}</td>
+      <td>${qso.score1 || ''}</td>
       <td>${qso.call2}</td>
       <td>${qso.grid2 || ''}</td>
       <td>${geo2.distance || ''}</td>
       <td>${geo2.country || ''}</td>
       <td>${geo2.flag}</td>
       <td>${qso.snr2 === -128 ? '' : qso.snr2}</td>
-      <td>${qso.report1 || ''}</td>
       <td>${qso.report2 || ''}</td>
+      <td>${qso.score2 || ''}</td>
       <td>${qso.state === 'DONE' ? '✅' : qso.state}</td>
       <td>${renderTxCell(qso)}</td>
       <td>${durationStr}</td>
@@ -983,6 +1170,98 @@ function addQsoRow(qso){
     });
 }
 
+// create a sorting stateobject to keep track of current sort field and direction
+const currentSort = {
+  field: null,
+  dir: 'asc' // or 'desc'
+};
+
+function updateSortIndicators() {
+  document.querySelectorAll('#ft8-qsos th.sortable').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+
+    if (th.dataset.sort === currentSort.field) {
+      th.classList.add(
+        currentSort.dir === 'asc' ? 'sort-asc' : 'sort-desc'
+      );
+    }
+  });
+}
+updateSortIndicators();
+
+function statePriority(s){
+  switch(s){
+      case 'CQ': return 0;
+      case 'CALLING': return 1;
+      case 'REPORT_RCVD': return 2;
+      case 'REPORT_EXCHANGED': return 3;
+      case 'RRR_SENT': return 4;
+      case 'DONE': return 5;
+      default: return 6;
+  }
+}
+
+
+function compareQsos(a, b) {
+  let va = a[currentSort.field];
+  let vb = b[currentSort.field];
+
+  // normalize undefined / null
+  if (va == null) va = '';
+  if (vb == null) vb = '';
+
+  // special case: state
+  if (currentSort.field === 'state') {
+    const diff = statePriority(va) - statePriority(vb);
+    return currentSort.dir === 'asc' ? diff : -diff;
+  }
+
+  // treat -128 (empty SNR) as null
+  if (va === -128) va = null;
+  if (vb === -128) vb = null;
+
+  // detect numeric
+  const na = Number(va);
+  const nb = Number(vb);
+  const bothNumeric = !isNaN(na) && !isNaN(nb);
+
+  let result;
+
+  if (bothNumeric) {
+    result = na - nb;
+  } else {
+    // 🔥 STRING COMPARISON (correct way)
+    result = String(va).localeCompare(String(vb), undefined, {
+      numeric: true,      // "Z2" < "Z10"
+      sensitivity: 'base' // case-insensitive
+    });
+  }
+
+  return currentSort.dir === 'asc' ? result : -result;
+}
+
+// click on header to sort by that field, toggle asc/desc if already sorting by it
+document.querySelectorAll('#ft8-qsos th').forEach(th => {
+  th.addEventListener('click', () => {
+    const field = th.dataset.sort;
+    if (!field) return;
+
+    if (currentSort.field === field) {
+      currentSort.dir = currentSort.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      currentSort.field = field;
+      currentSort.dir = 'asc';
+    }
+
+     // update arrows
+    updateSortIndicators();
+
+    autoSort = true;
+
+    fetchFt8QSOs(); // refresh with new sorting
+  });
+});
+
 // Poll server for QSOs every 3 seconds
 async function fetchFt8QSOs(){
     try{
@@ -995,28 +1274,19 @@ async function fetchFt8QSOs(){
         // <-- CLEAR TABLE BEFORE ADDING NEW QSOs
         qsosTableBody.innerHTML = '';
 
-        function statePriority(s){
-            switch(s){
-                case 'CQ': return 0;
-                case 'CALLING': return 1;
-                case 'REPORT_RCVD': return 2;
-                case 'REPORT_EXCHANGED': return 3;
-                case 'RRR_SENT': return 4;
-                case 'DONE': return 5;
-                default: return 6;
-            }
-        }
+        // data.sort((a, b) => {
+        //     const pa = statePriority(a.state);
+        //     const pb = statePriority(b.state);
 
-        data.sort((a, b) => {
-            const pa = statePriority(a.state);
-            const pb = statePriority(b.state);
+        //     // prima per stato
+        //     if(pa !== pb) return pa - pb;
 
-            // prima per stato
-            if(pa !== pb) return pa - pb;
+        //     // poi per tempo (più recenti sopra)
+        //     return Number(b.lastHeard) - Number(a.lastHeard);
+        // });
 
-            // poi per tempo (più recenti sopra)
-            return Number(b.lastHeard) - Number(a.lastHeard);
-        });
+        data.sort(compareQsos); // sort based on current sort state
+        
         showAll = document.getElementById('showAllQsos').checked;
         // add rows
         for(const qso of data) {

@@ -1,11 +1,12 @@
 #include "wifi_config.h"
 #include "esp_wifi.h"
 #include <Arduino.h>
-#include <WiFi.h>
+#include <ETH.h>
 #include <WebServer.h>
 #include <WebSocketsClient.h>
 #include <Preferences.h>
 #include <LittleFS.h>
+#include "esp_heap_caps.h"
 #include "ui.h"
 #include <ArduinoJson.h>
 #include <sys/time.h>
@@ -17,13 +18,17 @@
 #include "ft8_tx.h"
 #include "secrets.h"
 #include "ft8_freq_opt.h"
-
+#include "qsostats.h"
+#include "adif.h"
 
 extern FT8_TX ft8tx; // declared in main.cpp
 extern FT8FreqOptimizer ft8FreqOptimizer; // declared in main.cpp
+extern QSOStats qsoStats; // declared in main.cpp 
 
 static WebServer server(80);
 static WebSocketsClient ws;
+
+fs::LittleFSFS LogsFS; // Separate LittleFS instance for logs to avoid wear on the main filesystem
 
 #define CHUNK_SAMPLES 160
 #define FRAME_SIZE (16 + CHUNK_SAMPLES*2) // header 16B + audio
@@ -46,6 +51,18 @@ volatile uint8_t audioPoolHead = 0;
 QueueHandle_t audioQueue;      // filled audio frames
 QueueHandle_t freeFrameQueue;  // free reusable frames
 QueueHandle_t ft8Queue;        // text only, no pointers
+QueueHandle_t adifQueue;       // ADIF upload items
+
+#define ETH_PHY_TYPE ETH_PHY_W5500
+#define ETH_PHY_ADDR 1
+#define ETH_PHY_CS   1 // 15
+#define ETH_PHY_IRQ  6 // 4
+#define ETH_PHY_RST  8 // 5
+
+// SPI pins
+#define ETH_SPI_SCK   18 // 14
+#define ETH_SPI_MISO  7  // 12
+#define ETH_SPI_MOSI  2  // 13
 
 
 const char*    ws_server_host = "192.168.1.184";   // Python PC IP
@@ -58,7 +75,7 @@ static uint32_t lastReconnectMs = 0;
 static bool staConnecting = false;
 static uint32_t staStartMs = 0;
 
-static std::vector<Ft8Spot> ft8_spots;
+// static std::vector<Ft8Spot> ft8_spots;
 
 static String savedSsid;
 static String savedPass;
@@ -76,7 +93,6 @@ bool     g_ft8ServerActive    = false;
 uint32_t g_ft8LastRxMs        = 0;
 
 QSOManager qsoManager;
-
 
 // ===== Helpers =====
 
@@ -180,6 +196,7 @@ static void handleApiUi() {
     doc["ft8_offset"] = s.ft8_offset;
     doc["ft8_offset_enabled"] = s.ft8_offset_enabled;
     doc["ft8_testmsg"] = s.ft8_testmsg;
+    doc["qrz_key"] = s.qrz_key;
     doc["mycall"] = s.mycall;
     doc["mygrid"] = s.mygrid;
     doc["mode"] = s.mode; doc["bandval"] = s.bandval; doc["stepsize"] = s.stepsize;
@@ -220,6 +237,7 @@ static void handleApiUiSave() {
 
     JSET(vfoA); JSET(vfoB); JSET(vfoSel); 
     JSET(ft8_offset); JSET(ft8_offset_enabled); JSET_STRING(ft8_testmsg); 
+    JSET_STRING(qrz_key);
     JSET_STRING(mycall); JSET_STRING(mygrid); 
     JSET(mode); JSET(bandval);
     JSET(stepsize); JSET(rit); JSET(ritActive); JSET(volume);
@@ -273,33 +291,33 @@ static void handleFt8Stop() {
 
 
 // Get decoded spots
-static void handleFt8Spots() {
-    JsonDocument doc;
-    JsonArray arr = doc.to<JsonArray>();  
-    //std::lock_guard<std::mutex> lock(ft8_mutex);
-    int idx = 0;
-    for(auto &s : ft8_spots){
-        JsonObject o = arr.add<JsonObject>();
-        o["decoded_line"] = s.decoded_line;
-        o["callsign"] = s.callsign;
-        o["grid"] = s.grid;
-        o["receiver_callsign"] = s.receiver_callsign;
-        o["receiver_grid"] = s.receiver_grid;
-        o["snr"] = s.snr_db; 
-        o["mode"] = s.mode;
-        o["time"] = s.timestamp;
-        o["freq"] = s.freq_hz;
-        o["report"] = s.report;
-        o["cq"] = s.cq;
-        o["directed_to_me"] = s.directed_to_me;
-        idx++;
-    }
-    String out;
-    serializeJson(doc, out);
-    server.send(200, "application/json", out);
+// static void handleFt8Spots() {
+//     JsonDocument doc;
+//     JsonArray arr = doc.to<JsonArray>();  
+//     //std::lock_guard<std::mutex> lock(ft8_mutex);
+//     int idx = 0;
+//     for(auto &s : ft8_spots){
+//         JsonObject o = arr.add<JsonObject>();
+//         o["decoded_line"] = s.decoded_line;
+//         o["callsign"] = s.callsign;
+//         o["grid"] = s.grid;
+//         o["receiver_callsign"] = s.receiver_callsign;
+//         o["receiver_grid"] = s.receiver_grid;
+//         o["snr"] = s.snr_db; 
+//         o["mode"] = s.mode;
+//         o["time"] = s.timestamp;
+//         o["freq"] = s.freq_hz;
+//         o["report"] = s.report;
+//         o["cq"] = s.cq;
+//         o["directed_to_me"] = s.directed_to_me;
+//         idx++;
+//     }
+//     String out;
+//     serializeJson(doc, out);
+//     server.send(200, "application/json", out);
 
     
-}
+// }
 
 // Send an FT8 CQ (or message)
 static void handleFt8Send() {
@@ -307,23 +325,23 @@ static void handleFt8Send() {
     deserializeJson(doc, server.arg("plain"));
     int freq = doc["freq"] | 0;
     String msg = doc["msg"] | "";
-    String reply;
+    // String reply;
 
     // create a new QSO entry for this outgoing message (for tracking in UI)
-    QSOManager::Ft8Fields f;
-    QSOManager::Ft8MsgType type = qsoManager.parseMessage(msg.c_str(),f);
-    if(type == QSOManager::MSG_UNKNOWN) {
+    Ft8Fields f;
+    Ft8MsgType type = qsoManager.parseMessage(msg.c_str(),f);
+    if(type == MSG_UNKNOWN) {
         server.send(400, "application/json", "{\"error\":\"unrecognized message format\"}");
         return;
     }
     
     f.ts  = utc_ms() / 1000; // current time in seconds   
     uint8_t parity = ((f.ts / 15) + 1) % 2; // simple parity based on next time slot
-    QSOManager::QSO * q = qsoManager.addOrUpdate(f.type,f,f.ts, parity, reply); // create a new QSO entry and get its ID
+    QSO * q = qsoManager.addOrUpdate(f.type,f,f.ts, parity); //, reply); // create a new QSO entry and get its ID
     
     Serial.printf("Scheduling FT8 TX for QSO %d at %d Hz: %s myParity=%d\r\n", 
             q->qso_id, ui_get_vfo_freq() + ui_get_ft8_offset(), msg.c_str(), parity);
-            ft8tx.requestTransmission(freq, msg.c_str(), parity, q->qso_id);
+            ft8tx.requestTransmission(freq, msg.c_str(),type, parity, q->qso_id);
 
     // then log on the WEB UI
     //Serial.printf("[FT8] Send test at %d Hz: %s\n", freq, msg.c_str());
@@ -332,6 +350,7 @@ static void handleFt8Send() {
     server.send(200, "application/json", buf);
 }
 
+//answer an FT8 CQ
 void handleFt8Answer() {
     if (!server.hasArg("plain")) {
         server.send(400, "application/json", "{\"error\":\"missing body\"}");
@@ -340,7 +359,7 @@ void handleFt8Answer() {
 
     String body = server.arg("plain");
 
-    StaticJsonDocument<128> doc;
+    JsonDocument doc;
     DeserializationError err = deserializeJson(doc, body);
 
     if (err) {
@@ -363,11 +382,15 @@ void handleFt8Answer() {
             uint8_t theirParity = ((q.lastHeard / 15) % 2);
             uint8_t myParity = (theirParity == 0) ? 1 : 0;
 
-            if (strlen(q.reply) == 0) return;
+            //if (strlen(q.reply) == 0) return;
+            // make a local copy of the reply string like:
+            // <call1> IW5ALZ JN53
+            String reply = String(q.call1) + " " + String(ui_get_mycall()) + " " + String(ui_get_mygrid()); 
+
 
             Serial.printf("Scheduling FT8 reply to QSO %d at %d Hz: %s theirParity=%d myParity=%d\r\n", 
-            q.qso_id, ui_get_vfo_freq() + ui_get_ft8_offset(), q.reply, theirParity, myParity);
-            ft8tx.requestTransmission(freq, q.reply, myParity, q.qso_id);
+            q.qso_id, ui_get_vfo_freq() + ui_get_ft8_offset(), reply.c_str(), theirParity, myParity);
+            ft8tx.requestTransmission(freq, reply.c_str(), MSG_CQ_GRID, myParity, q.qso_id);
 
             break;
         }
@@ -389,7 +412,7 @@ void handleFt8Clear() {
 
     String body = server.arg("plain");
 
-    StaticJsonDocument<128> doc;
+    JsonDocument doc;
     DeserializationError err = deserializeJson(doc, body);
 
     if (err) {
@@ -431,6 +454,12 @@ static void handleMemoryStats() {
     o["heap_min_free"]  = ESP.getMinFreeHeap();
     o["heap_max_alloc"] = ESP.getMaxAllocHeap();
 
+    // Internal 8-bit capable RAM only (excludes PSRAM)
+    o["internal_heap_total"]     = heap_caps_get_total_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    o["internal_heap_free"]      = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    o["internal_heap_min_free"]  = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    o["internal_heap_max_alloc"] = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+
     o["psram_total"] = ESP.getPsramSize();
     o["psram_free"]  = ESP.getFreePsram();
 
@@ -458,7 +487,7 @@ static void startServer() {
 
     server.serveStatic("/app.js", LittleFS, "/app.js");
     server.serveStatic("/style.css", LittleFS, "/style.css");
-    server.serveStatic("/cty.dat", LittleFS, "/cty.dat");
+    server.serveStatic("/cty_extended.dat", LittleFS, "/cty_extended.dat");
 
     server.on("/api/status", HTTP_GET, handleApiStatus);
     server.on("/api/ui", HTTP_GET, handleApiUi);
@@ -467,7 +496,7 @@ static void startServer() {
     server.on("/api/ft8/start", HTTP_POST, handleFt8Start);
     server.on("/api/ft8/stop", HTTP_POST, handleFt8Stop);
     server.on("/api/ft8/send", HTTP_POST, handleFt8Send);
-    server.on("/api/ft8/spots", HTTP_GET, handleFt8Spots);
+    //server.on("/api/ft8/spots", HTTP_GET, handleFt8Spots);
     server.on("/api/ft8/answer", HTTP_POST, handleFt8Answer);
     server.on("/api/ft8/clear",  HTTP_POST, handleFt8Clear);
 
@@ -483,9 +512,24 @@ static void startServer() {
         server.send(200, "application/json", qsoManager.getCompletedQSOsJson());
     });
 
-    server.on("/api/memstats", HTTP_GET, handleMemoryStats);
+    server.on("/api/ft8/worked_dxcc", HTTP_GET, []() {
+        server.send(200, "application/json", qsoStats.getJsonWorkedDXCC());
+    });
 
-    server.serveStatic("/data", LittleFS, "/data");
+    server.on("/api/ft8/qsos_dxcc", HTTP_GET, []() {
+        server.send(200, "application/json", qsoStats.getJsonQSOsDXCC());
+    });
+
+    server.on("/api/ft8/bands_dxcc", HTTP_GET, []() {
+        server.send(200, "application/json", qsoStats.getJsonBandsDXCC());
+    });
+
+    server.on("/api/ft8/clearAllWorkedDXCC", HTTP_GET, []() {
+        qsoStats.clearAllWorkedDXCC();
+        server.send(200, "application/json", "{\"ok\":true}");
+    });
+
+    server.on("/api/memstats", HTTP_GET, handleMemoryStats);
 
     server.begin(); 
     serverStarted = true;     
@@ -551,13 +595,6 @@ static void addFt8SpotFromJson(const char* json)
     spot.cq = doc["cq"] | false;
     spot.directed_to_me = false; // you can add logic later
 
-    // ---- Store safely ----
-    ft8_spots.push_back(spot);
-
-    // Keep memory bounded (VERY important)
-    if (ft8_spots.size() > 50)
-        ft8_spots.erase(ft8_spots.begin());
-
     qsoManager.processFt8Spot(spot);
 
 }
@@ -573,88 +610,202 @@ uint8_t wifiBarsFromRSSI(int rssi)
     return 0;                    // No signal
 }
 
-
-// ======== Main Network Task ========
 // ======== Network Task (Core 0) ========
+void NetworkTask(void* pvParameters) {
 
-void NetworkTask_simple_working(void* pvParameters) {
+    Serial.println("[ETH] Network task started on Core 0");
 
-    Serial.println("[WiFi] Network task started on Core 0");
-    staStartMs = millis();
-    lastReconnectMs = 0;
     static unsigned long lastReconnectAttempt = 0;
-    staConnecting = true;
-    static uint8_t targetBssid[] = SECRET_BSSID;
+    static bool ethConnected = false;
 
-//    WiFi.onEvent(WiFiEvent);
-    // ASPETTA che la UI sia completamente inizializzata e il bus I2C sia calmo
-    vTaskDelay(2000 / portTICK_PERIOD_MS); 
+    // Wait for UI startup
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
 
-    // Connect to WiFi (avoid aggressive stop/start loops)
-    WiFi.useStaticBuffers(true);
-    WiFi.persistent(false);
-    WiFi.mode(WIFI_STA);
-    WiFi.setMinSecurity(WIFI_AUTH_WPA2_PSK);
-    WiFi.setAutoReconnect(true);
-    WiFi.begin(SECRET_SSID, SECRET_PASS, 0);
-    esp_wifi_set_ps(WIFI_PS_NONE);
-            
+    // ---- Start Ethernet ----
+    Serial.println("[ETH] Starting Ethernet...");
+    Serial.println("Initializing SPI...");
+    SPI.begin(ETH_SPI_SCK, ETH_SPI_MISO, ETH_SPI_MOSI);
 
-    // Main network loop
+    pinMode(ETH_PHY_RST, OUTPUT);
+
+    digitalWrite(ETH_PHY_RST, LOW);
+    delay(100);
+
+    digitalWrite(ETH_PHY_RST, HIGH);
+    delay(200);
+
+    Serial.println("Initializing Ethernet...");
+      
+    bool ret = ETH.begin(
+      ETH_PHY_W5500,        //           ETH_PHY_TYPE,
+      ETH_PHY_ADDR,
+      ETH_PHY_CS,
+      ETH_PHY_IRQ,
+      ETH_PHY_RST,
+      SPI);
+
+  Serial.printf("ETH.begin returned: %s\n",
+                ret ? "true" : "false");
+ 
+    // Wait for link + IP
+    while (!ETH.linkUp() || ETH.localIP() == IPAddress(0,0,0,0)) {
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+        Serial.print(".");
+    }
+
+    Serial.printf("[ETH] Connected, IP=%s\n",
+                  ETH.localIP().toString().c_str());
+
+    ethConnected = true;
+
+    setup_time_once();
+    startServer();
+
+    // ---- Main loop ----
     for(;;) {
 
         // ---- HTTP server ----
-        if (serverStarted) server.handleClient();
+        if (serverStarted)
+            server.handleClient();
 
-        // ---- WebSocket loop ----
+        // ---- WebSocket ----
         ws.loop();
 
         // ---- WebSocket reconnect ----
-        if (!ws.isConnected() && WiFi.status() == WL_CONNECTED &&
+        if (!ws.isConnected() &&
+            ETH.linkUp() &&
             millis() - lastReconnectAttempt > 5000) {
+
             lastReconnectAttempt = millis();
-            ets_printf("[WS] Reconnecting...\r\n");
+
+            Serial.println("[WS] Reconnecting...");
+
             ws.begin(ws_server_host, ws_server_port, "/");
             ws.onEvent(webSocketEvent);
         }
 
-        // ---- WiFi reconnecting ----
-        if (WiFi.status() != WL_CONNECTED &&
-            millis() - lastReconnectMs > 15000) {
-            lastReconnectMs = millis();
+        // ---- Ethernet reconnect handling ----
+        bool link = ETH.linkUp();
 
-            ets_printf("[WiFi] Reconnecting...\r\n");
-            wl_status_t st = WiFi.status();
-            if (st == WL_NO_SSID_AVAIL || st == WL_CONNECT_FAILED || st == WL_DISCONNECTED) {
-                WiFi.setMinSecurity(WIFI_AUTH_WPA2_PSK);
-                WiFi.begin(SECRET_SSID, SECRET_PASS, 0);
-                esp_wifi_set_ps(WIFI_PS_NONE);
-            } else {
-                WiFi.reconnect();
-                esp_wifi_set_ps(WIFI_PS_NONE);
+        if (!link && ethConnected) {
+
+            Serial.println("[ETH] Link lost");
+
+            ethConnected = false;
+
+            g_wifiConnected = false;
+            g_wifiBars = 0;
+            g_wifiRssi = 0;
+        }
+
+        if (link && !ethConnected) {
+
+            Serial.println("[ETH] Link restored");
+
+            // Wait for DHCP if needed
+            while (ETH.localIP() == IPAddress(0,0,0,0)) {
+                vTaskDelay(100 / portTICK_PERIOD_MS);
             }
-            staConnecting = true;
-            staStartMs = millis();
-        }
 
-        if(WiFi.status() == WL_CONNECTED && staConnecting) {
-            WiFi.setSleep(false);
-            esp_wifi_set_ps(WIFI_PS_NONE);
-            ets_printf("[WiFi] Connected, IP=%s\n", WiFi.localIP().toString().c_str());
+            Serial.printf("[ETH] IP=%s\n",
+                          ETH.localIP().toString().c_str());
+
             setup_time_once();
-            // Start HTTP server
-            startServer();
-            staConnecting = false;
+
+            if (!serverStarted)
+                startServer();
+
+            ethConnected = true;
         }
 
-        vTaskDelay(10); // give CPU time to other tasks (WiFi core, DSP)
-    
-    } // for(;;)
+        vTaskDelay(10);
+
+        // ---- Send audio to websocket ----
+        AudioFrame* framePtr;
+
+        if (xQueueReceive(audioQueue, &framePtr, 0) == pdTRUE) {
+
+            if (ws.isConnected()) {
+
+                uint8_t packet[16 + WS_AUDIO_BUF_SAMPLES * 2];
+
+                // timestamp
+                for (int i=0;i<8;i++)
+                    packet[7-i] =
+                        (framePtr->ts_ms >> (8*i)) & 0xFF;
+
+                // n_samples
+                for (int i=0;i<4;i++)
+                    packet[8+3-i] =
+                        (framePtr->n_samples >> (8*i)) & 0xFF;
+
+                // freq
+                for (int i=0;i<4;i++)
+                    packet[12+3-i] =
+                        (framePtr->freq_hz >> (8*i)) & 0xFF;
+
+                size_t samplesToCopy =
+                    min((uint16_t)framePtr->n_samples,
+                        (uint16_t)WS_AUDIO_BUF_SAMPLES);
+
+                memcpy(packet + 16,
+                       framePtr->samples,
+                       samplesToCopy * 2);
+
+                ws.sendBIN(packet,
+                           16 + samplesToCopy * 2);
+            }
+
+            xQueueSend(freeFrameQueue, &framePtr, 0);
+        }
+
+        // ---- Send ADIF ----
+        if (ws.isConnected()) {
+
+            AdifUploadItem adifItem;
+
+            if (xQueueReceive(adifQueue,
+                              &adifItem,
+                              0) == pdTRUE) {
+
+                size_t len =
+                    strnlen(adifItem.adif,
+                            sizeof(adifItem.adif));
+
+                ws.sendTXT(adifItem.adif, len);
+            }
+        }
+
+        // ---- FT8 messages ----
+        char ft8Msg[MAX_FT8_MSG];
+
+        while (xQueueReceive(ft8Queue,
+                             ft8Msg,
+                             0) == pdTRUE) {
+
+            addFt8SpotFromJson(ft8Msg);
+
+            g_ft8LastRxMs = millis();
+        }
+
+        // ---- Global network status ----
+        g_wifiConnected = ETH.linkUp();
+
+        // Ethernet has no RSSI
+        g_wifiRssi = 0;
+        g_wifiBars = ETH.linkUp() ? 5 : 0;
+
+        // ---- FT8 activity timeout ----
+        if (g_ft8ServerConnected) {
+            g_ft8ServerActive =
+                (millis() - g_ft8LastRxMs) < 15000;
+        } else {
+            g_ft8ServerActive = false;
+        }
+    }
 }
 
-
-
-void NetworkTask(void* pvParameters) {
+void WiFiNetworkTask(void* pvParameters) {
 
     Serial.println("[WiFi] Network task started on Core 0");
     staStartMs = millis();
@@ -664,17 +815,14 @@ void NetworkTask(void* pvParameters) {
     static uint8_t targetBssid[] = SECRET_BSSID;
 
 //    WiFi.onEvent(WiFiEvent);
-    // ASPETTA che la UI sia completamente inizializzata e il bus I2C sia calmo
+    // Wait for UI to be fully initialized and I2C bus to be idle
     vTaskDelay(2000 / portTICK_PERIOD_MS); 
 
     // Connect to WiFi
-    if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di WiFi.begin !!!\n");
+    if(!heap_caps_check_integrity_all(true)) ets_printf("!!! Corrupted heap before WiFi.begin !!!\n");
             
     Serial.printf("[WiFi] Connecting to SSID: %s\n", SECRET_SSID);
     WiFi.begin(SECRET_SSID, SECRET_PASS);
-    //WiFi.begin(SECRET_SSID, SECRET_PASS,0, targetBssid);
-    //WiFi.begin("Pixel10", "pippo123");
-    //forceConnect();
     // Wait for WiFi STA connection
     while(WiFi.status() != WL_CONNECTED) {
         vTaskDelay(500);
@@ -682,9 +830,6 @@ void NetworkTask(void* pvParameters) {
     }
     Serial.printf("[WiFi] Connected, IP=%s\n", WiFi.localIP().toString().c_str());
     setup_time_once();
-
-    // Start HTTP server
-    // startServer();
 
     // Main network loop
     for(;;) {
@@ -710,13 +855,12 @@ void NetworkTask(void* pvParameters) {
             lastReconnectMs = millis();
             
             ets_printf("[WiFi] Pre-reconnect heap check...\n");
-            // Se questo fallisce, l'heap era già rotto PRIMA di WiFi.begin
-            if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di WiFi.begin !!!\n");
+            // If this fails, the heap was already corrupted BEFORE WiFi.begin
+            if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORRUPTED before WiFi.begin !!!\n");
 
             ets_printf("[WiFi] Reconnecting...\r\n");
             WiFi.disconnect(true);
             vTaskDelay(500); // short delay before reconnecting
-            // WiFi.begin(SECRET_SSID, SECRET_PASS,0, targetBssid);
             WiFi.begin(SECRET_SSID, SECRET_PASS,0);
             esp_wifi_set_ps(WIFI_PS_NONE);
             staConnecting = true;
@@ -765,6 +909,17 @@ void NetworkTask(void* pvParameters) {
           xQueueSend(freeFrameQueue, &framePtr, 0);
         }
 
+        // ---- Send ADIF to websocket if available ----
+        if (ws.isConnected()) {
+            AdifUploadItem adifItem;
+            if (xQueueReceive(adifQueue, &adifItem, 0) == pdTRUE) {
+                size_t len = strnlen(adifItem.adif, sizeof(adifItem.adif));
+
+                Serial.printf("Sending ADIF len=%u: '%s'\n", len, adifItem.adif);
+                ws.sendTXT(adifItem.adif, len); 
+            }
+        }
+
         // ---- Process FT8 messages received ----
         char ft8Msg[MAX_FT8_MSG];
         while (xQueueReceive(ft8Queue, ft8Msg, 0) == pdTRUE) {
@@ -811,16 +966,67 @@ void NetworkTask(void* pvParameters) {
     } // for(;;)
 }
 
+void listLittleFS() {
+    Serial.println("\n--- LittleFS file list ---");
+
+    File root = LittleFS.open("/");
+    File file = root.openNextFile();
+
+    while (file) {
+        Serial.print("FILE: ");
+        Serial.print(file.name());
+        Serial.print(" | SIZE: ");
+        Serial.println(file.size());
+
+        file = root.openNextFile();
+    }
+
+    Serial.println("--------------------------\n");
+}
+
+
+void listLogsFS() {
+    Serial.println("\n--- LogsFS file list ---");
+
+    File root = LogsFS.open("/");
+    File file = root.openNextFile();
+
+    while (file) {
+        Serial.print("FILE: ");
+        Serial.print(file.name());
+        Serial.print(" | SIZE: ");
+        Serial.println(file.size());
+
+        file = root.openNextFile();
+    }
+
+    Serial.println("--------------------------\n");
+}
 // ===== Public Setup/Loop =====
 
 void wifi_config_setup() {
-    if (!LittleFS.begin(true)) Serial.println("[FS] LittleFS mount failed");
+    // if (!LittleFS.begin(true)) 
+    if(!LittleFS.begin(true, "/littlefs", 10, "spiffs")) 
+        Serial.println("[FS] LittleFS mount failed");
+    if(!LogsFS.begin(true, "/logs", 10, "logs")) 
+        Serial.println("[FS] LogsFS mount failed");
+
+    Serial.printf("SPIFFS total: %d\n", LittleFS.totalBytes());
+    Serial.printf("SPIFFS used : %d\n", LittleFS.usedBytes());
+    listLittleFS();
+    listLogsFS();
+
+    // Initialize QSOManager after Serial is ready
+    qsoManager.begin();
+    
     loadCredentials();
 
     if(audioQueue == NULL)  audioQueue = xQueueCreate(6, sizeof(AudioFrame*));
     if(freeFrameQueue == NULL) freeFrameQueue = xQueueCreate(AUDIO_FRAME_POOL, sizeof(AudioFrame*));
     
-    // 3. Popola la coda (Assicurati che audioPool sia GLOBALE o STATIC)
+    if(adifQueue == NULL) adifQueue = xQueueCreate(1, sizeof(AdifUploadItem)); 
+
+    // 3. Popolate the queue (be sure audioPool is GLOBAL or STATIC)
     if (uxQueueMessagesWaiting(freeFrameQueue) == 0) {
         for (int i=0; i < AUDIO_FRAME_POOL; i++) {
             AudioFrame* f = &audioPool[i];
@@ -831,7 +1037,7 @@ void wifi_config_setup() {
     if(ft8Queue == NULL) ft8Queue = xQueueCreate(8,  MAX_FT8_MSG);
 
     Serial.printf("[WiFi] Start network task on Core 0\n");
-    xTaskCreatePinnedToCore(NetworkTask, "NET", 24000, NULL, 1, NULL, 0); 
+    xTaskCreatePinnedToCore(NetworkTask, "NET", 36000, NULL, 1, NULL, 0); 
 }
 
 // ===== Audio Push =====
@@ -860,7 +1066,7 @@ void wifi_config_audio_push(int32_t freq_hz, int16_t sample)
         frame->ts_ms     = utc_ms();
         frame->freq_hz   = freq_hz;
         frame->n_samples = WS_AUDIO_BUF_SAMPLES;
-        // send the ready frame to the audio queue
+        // send the ready frame to the websocket audio queue
         if (xQueueSend(audioQueue, &frame, 0) != pdTRUE) {
           // audio queue full, drop the frame and return it to free pool
           xQueueSend(freeFrameQueue, &frame, 0); 
@@ -870,5 +1076,14 @@ void wifi_config_audio_push(int32_t freq_hz, int16_t sample)
         idx = 0;
   
     }
+}
+
+
+// ===== ADIF Text Push =====
+// It is called from QSO Manager to stream ADIF text to WebSocket server
+void wifi_config_adif_push(AdifUploadItem adif)
+{
+    // send the ADIF text to the websocket queue
+    xQueueSend(adifQueue, &adif, 0); 
 }
 

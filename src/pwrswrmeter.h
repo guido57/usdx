@@ -8,9 +8,11 @@ public:
 
     void begin() {
         analogReadResolution(12); // 0–4095
-
-        analogSetPinAttenuation(_pwrPin, ADC_11db);
-        analogSetPinAttenuation(_swrPin, ADC_11db);
+        pinMode(_pwrPin, ANALOG);
+        pinMode(_swrPin, ANALOG);
+        // analogSetPinAttenuation(_pwrPin, ADC_11db);
+        // analogSetPinAttenuation(_swrPin, ADC_11db);
+        analogSetAttenuation(ADC_11db);
     }
 
     // --- Public API ---

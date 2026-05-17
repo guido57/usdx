@@ -78,6 +78,8 @@ void Encoder::checkButtons() {
   uint8_t pins[3] = {_pinRotSW, _pinLeftSW, _pinRightSW};
   
   for (int i = 0; i < 3; i++) {
+    if(pins[i] == 255) continue; // Skip if pin not assigned  
+
     bool currentState = digitalRead(pins[i]);
     
     // Use longer debounce for all switch pins

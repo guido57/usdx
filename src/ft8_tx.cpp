@@ -3,11 +3,12 @@
 #include "ft8/encode.h"
 #include "ft8/constants.h"
 #include <time.h>
-#include "rx_att_pwm.h"
-#include "tx_bias_pwm.h"
+//#include "rx_att_pwm.h"
+//#include "tx_bias_pwm.h"
 #include "ui.h"
 #include "configuration.h"
 #include "ant_filters.h"
+#include "ft8_types.h"
 #include "qso_manager.h"
 #include "ft8_freq_opt.h"
 
@@ -59,7 +60,7 @@ uint8_t getSlotParity(struct tm &t) {
 }
 
 // ---------------- REQUEST TX ----------------
-bool FT8_TX::requestTransmission(uint32_t baseFreqHz, const char *msg, uint8_t parity, uint32_t qso_id) {
+bool FT8_TX::requestTransmission(uint32_t baseFreqHz, const char *msg, Ft8MsgType msgType, uint8_t parity, uint32_t qso_id) {
 
     TxRequest req;
 
@@ -70,6 +71,7 @@ bool FT8_TX::requestTransmission(uint32_t baseFreqHz, const char *msg, uint8_t p
     strlcpy(req.message, msg, sizeof(req.message));
 
     req.parity = parity;   // ⭐ store desired slot
+    req.msgType = msgType; // ⭐ store message type
     //txRequested = true;
     if(xQueueSend(txQueue, &req, 0) != pdTRUE) {
         Serial.println("Failed to enqueue TX request");
@@ -90,8 +92,8 @@ bool FT8_TX::startContinuousTransmission(uint32_t baseFreqHz, const char *msg) {
     Serial.printf("Started continuous transmission at %u Hz\r\n", baseFreqHz);
 
     si5351.setupPllForTx(baseFreqHz); // Pre-configure PLL for the base frequency to speed up the first tone generation
-    setRxAttFromUi(0);  // Set RX attenuation to maximum (0V to the Mosfet Gate)
-    setTxBiasFromUi(ui_get_tx_bias());  // Set TX bias at 1V to the Mosfet Gate) during tuning and RX to protect the PA   
+    //setRxAttFromUi(0);  // Set RX attenuation to maximum (0V to the Mosfet Gate)
+    //setTxBiasFromUi(ui_get_tx_bias());  // Set TX bias at 1V to the Mosfet Gate) during tuning and RX to protect the PA   
     audioVolume = 0; // Mute audio during TX    
     // digitalWrite(GPIO_TX, HIGH); // Set relay to TX mode (energize)
     antFilters->setTx(); // Set relay for RX/TX switching to TX
@@ -107,8 +109,8 @@ bool FT8_TX::stopContinuousTransmission() {
     Serial.printf("Stopped continuous transmission \r\n");    
     si5351.oe(0b00000011);  // Enable CLK0, CLK1. Disable CLK2
     antFilters->setRx(); // Set relay for RX/TX switching to RX
-    setRxAttFromUi(ui_get_att_rf());  // Restore RX attenuation from UI
-    setTxBiasFromUi(TX_BIAS_FOR_RX);  // Restore TX bias from UI at a good level for RX (1V to the Mosfet Gate)
+    //setRxAttFromUi(ui_get_att_rf());  // Restore RX attenuation from UI
+    //setTxBiasFromUi(TX_BIAS_FOR_RX);  // Restore TX bias from UI at a good level for RX (1V to the Mosfet Gate)
     audioVolume = ui_get_volume(); // Restore audio volume from UI    
     //digitalWrite(GPIO_TX, LOW); // Set relay to RX mode (de-energize)
     return true;
@@ -123,12 +125,26 @@ uint8_t FT8_TX::getRetriesforQso(int qso_id) {
     return 0;
 }
 
+// get the next pending job for a given QSO (that is not cancelled and has the earliest target slot)
+FT8_TX::TxJob * FT8_TX::getNextPendingJob(int qso_id) {
+    // QSO * q = & qsoManager.qso_list[qso_id];
+    QSO * q = qsoManager.getQsoById(qso_id);
+    for (auto &j : txJobs) {
+        //Serial.printf("Examining job id=%u QSO id=%d\n", j.id, qso_id);
+        if (j.qso_id == qso_id  && j.cancelled == false) { 
+            return &j;
+            // Serial.printf("Cancelled job id=%u QSO=%d\n", j.id, qso_id);
+        }
+    }
+    return nullptr;
+}
 
 void FT8_TX::cancelJobsForQso(int qso_id) {
     // Serial.printf("Cancelling jobs for QSO %d\n", qso_id);
+    QSO * q = & qsoManager.qso_list[qso_id];
     for (auto &j : txJobs) {
         //Serial.printf("Examining job id=%u QSO id=%d\n", j.id, qso_id);
-        if (j.qso_id == qso_id) {
+        if (j.qso_id == qso_id  ) { // Only cancel jobs that are for the same QSO and have a message type less than or equal to the current message type (to avoid cancelling newer jobs that may have been created after this message was sent)
             j.cancelled = true;
             // Serial.printf("Cancelled job id=%u QSO=%d\n", j.id, qso_id);
         }
@@ -145,18 +161,21 @@ FT8_TX::TxJob FT8_TX::makeJobFromRequest(const TxRequest& req, int64_t absoluteS
     job.retryCount = 0;
     job.transmitting = false; // Initialize transmitting flag to false
     strlcpy(job.message, req.message, sizeof(job.message));
+    job.msgType = req.msgType; // ⭐ store message type
 
     job.cancelled = false;
 
     switch (req.parity)
     {
-    case 0:
-        job.targetSlot = (absoluteSlot & ~1LL) + 2; // next even slot    
+    case 0: // even slot
+        // job.targetSlot = (absoluteSlot & ~1LL) + 2; // next even slot    
+        job.targetSlot =  (absoluteSlot & 1LL) ? absoluteSlot + 1 : absoluteSlot + 2; // next even slot
         job.parity = 0; // mark as even parity
         break;
     
-    case 1:    
-        job.targetSlot = (absoluteSlot | 1LL) + 2; // next odd slot
+    case 1: // odd slot   
+        // job.targetSlot = (absoluteSlot | 1LL) + 2; // next odd slot
+        job.targetSlot =  (absoluteSlot & 1LL) ? absoluteSlot + 2 : absoluteSlot + 1; // next odd slot
         job.parity = 1; // mark as odd parity
         break;
 
@@ -211,15 +230,15 @@ void FT8_TX::taskLoop() {
 
             txJobs.push_back(job);
 
-            // Serial.printf("[FT8] queued job id=%u QSO=%u parity=%d: %s\n",
-            //               job.id, job.qso_id, job.parity, job.message);
+            Serial.printf("[FT8] queued job id=%u QSO=%u parity=%d: %s\n",
+                        job.id, job.qso_id, job.parity, job.message);
         }
 
         if(ui_get_ft8_offset_enabled()) {
             // get the calculated ft8 offset
             uint16_t bestFt8Offset = 
                 ft8FreqOptimizer.best_freq(ui_get_vfo_freq(), false, false);
-            Serial.printf("[FT8] applying best frequency offset of %d Hz\n", bestFt8Offset);
+            // Serial.printf("[FT8] applying best frequency offset of %d Hz\n", bestFt8Offset);
             setFt8Offset(bestFt8Offset); // save it to the UI state so it can be displayed and used for the next transmissions
         }   
 
@@ -235,21 +254,26 @@ void FT8_TX::taskLoop() {
             if (j.cancelled) continue;
 
             // not yet time → skip
-            if (j.targetSlot > currentSlot + 1) continue;
+            if (j.targetSlot > currentSlot + 1){
+                Serial.printf("[FT8] job id=%u not eligible yet (targetSlot=%lld currentSlot=%lld), skipping\n", j.id, j.targetSlot, currentSlot);
+                continue;
+
+            } 
 
             if (!best || j.targetSlot < best->targetSlot) {
                 best = &j;
             }
         }
-        // Serial.printf("[FT8] currentSlot=%lld selected job id=%u QSO=%u parity=%d targetSlot=%lld: %s\n",
-        //               currentSlot, best ? best->id : 0, best ? best->qso_id : 0, best ? best->parity : 255, best ? best->targetSlot : 0, best ? best->message : "N/A");
+        if(best)
+            Serial.printf("[FT8] currentSlot=%lld selected job id=%u QSO=%u parity=%d targetSlot=%lld: %s\n",
+                       currentSlot, best ? best->id : 0, best ? best->qso_id : 0, best ? best->parity : 255, best ? best->targetSlot : 0, best ? best->message : "N/A");
         // --------------------------------------------------------
         // 4) Enforce parity
         // --------------------------------------------------------
         int64_t txSlot = currentSlot + 1;
 
         if (best && best->parity != 255 && (txSlot & 1) != best->parity) {
-            // Serial.printf("[FT8] job %u parity mismatch, skipping\n", best->id);
+            Serial.printf("[FT8] job %u parity mismatch, skipping\n", best->id);
             best = nullptr;
         }
         // --------------------------------------------------------
@@ -283,8 +307,8 @@ void FT8_TX::taskLoop() {
             transmitting = true;
 
             si5351.setupPllForTx(best->baseFreq);
-            setRxAttFromUi(0);
-            setTxBiasFromUi(ui_get_tx_bias());
+            //setRxAttFromUi(0);
+            //setTxBiasFromUi(ui_get_tx_bias());
             audioVolume = 0;
 
             antFilters->setTx();
@@ -316,8 +340,8 @@ void FT8_TX::taskLoop() {
             // ----------------------------------------------------
             best->transmitting = false; // Clear transmitting flag for UI purposes
             si5351.oe(0b00000011);
-            setRxAttFromUi(ui_get_att_rf());
-            setTxBiasFromUi(TX_BIAS_FOR_RX);
+            //setRxAttFromUi(ui_get_att_rf());
+            //setTxBiasFromUi(TX_BIAS_FOR_RX);
 
             transmitting = false;
             antFilters->setRx();
@@ -331,16 +355,16 @@ void FT8_TX::taskLoop() {
             time_t timestamp;
             time(&timestamp);
 
-            QSOManager::Ft8Fields f;
-            auto type = qsoManager.parseMessage(best->message, f);
-
-            QSOManager::QSO *q =
-                qsoManager.addOrUpdate(type, f, timestamp, INT8_MAX, "");
-
+            Ft8Fields f;
+            Ft8MsgType type = qsoManager.parseMessage(best->message, f);
+            QSO *q = qsoManager.addOrUpdate(type, f, timestamp, 127); // Update QSO state based on the message we just sent (SNR is not relevant for sent messages, so we pass 0)
+            if(q->qso_id != best->qso_id) {
+                Serial.printf("[FT8] Warning: QSO ID mismatch after addOrUpdate. Expected %d, got %d\n", best->qso_id, q->qso_id);
+            }
             qsoManager.addLog(q, 'T', timestamp, q->state, best->message);
 
             // Retry logic
-            if (q->state == QSOManager::QSO_DONE) {
+            if (q->state == QSO_DONE) {
 
                 best->cancelled = true;
 

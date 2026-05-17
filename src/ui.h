@@ -26,6 +26,7 @@ struct UiSettings {
 	int32_t ft8_offset;
 	uint8_t ft8_offset_enabled;
 	char ft8_testmsg[64];
+	char qrz_key[20];
 	char mycall[10];
 	char mygrid[8];
 	int32_t bandval;
@@ -95,3 +96,4 @@ int8_t ui_get_volume();
 char * ui_get_mycall();
 char * ui_get_mygrid();
 char * ui_get_ft8_testmsg();
+char * ui_get_qrz_key();

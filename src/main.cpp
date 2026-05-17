@@ -7,7 +7,7 @@
 #include "secrets.h"
 #include "si5351.h"
 #include "ft8_tx.h"
-#include "iq_adc.h"
+// #include "iq_adc.h"
 #include "pcm1808.h"
 #include "ui.h"
 #include "audio_filter.h"
@@ -16,15 +16,19 @@
 #include "cic_filter.h"
 #include "cic_filter32.h"
 #include "wifi_config.h"
-#include "rx_att_pwm.h"
-#include "tx_bias_pwm.h"
+//#include "rx_att_pwm.h"
+//#include "tx_bias_pwm.h"
 #include "ft8_freq_opt.h"
 #include "ant_filters.h"
 #include "pwrswrmeter.h"
+#include "qsostats.h"
+#include "adif.h"
   
 static SI5351 si5351;
 FT8_TX ft8tx(si5351);
 FT8FreqOptimizer ft8FreqOptimizer;
+QSOStats qsoStats;
+Adif adif;
 
 PCM1808 * pcm1808;
 AntennaFilters *antFilters;
@@ -138,8 +142,8 @@ static void processAudioPCM1808() {
     pcm1808->getNextSample(sample32);
 
     // ADC scaling (prevent overflow in CIC)
-    sample32.I >>= 4;
-    sample32.Q >>= 4;
+    sample32.I >>= 6;
+    sample32.Q >>= 6;
 
     rawSampleCount++;
 
@@ -181,13 +185,12 @@ static void processAudioPCM1808() {
       // =========== AGC (if enabled) ===========
       // apply AGC if enabled in UI (AGC should be applied before volume control and peak measurement)
       audioSample = applyAGC(audioSample);
-
       // ===== PEAK AUDIO DEMOD =====
       int16_t absAudio = fastAbs16(audioSample);
       if (absAudio > peakAudio) peakAudio = absAudio;
       
       // ===== VOLUME CONTROL =====
-      int32_t loudAudio = (int32_t)audioSample * audioVolume /5; // scale volume (0-10) to 0.0-2.0 range
+      int32_t loudAudio = ((int32_t)audioSample * audioVolume) / 20; // scale volume (0-10) to 0.0-0.5 range
 
       // limiter
       if (loudAudio > 32767) loudAudio = 32767;
@@ -233,18 +236,18 @@ static void processAudioPCM1808() {
           peakWarn(peakWebAudio) ||
           peakWarn(peakAudioOut);
 
-    //  if (alert || warn) {
+        //if (alert || warn) {
 
-    //     Serial.printf(
-    //       "[PEAK %s] IQ I=%5d Q=%5d | Aud=%5d | WS=%5d | OUT=%5d\n",
-    //       alert ? "alert" : "warning",
-    //       peakIDec,
-    //       peakQDec,
-    //       peakAudio,
-    //       peakWebAudio,
-    //       peakAudioOut
-    //     );
-    //  }
+          Serial.printf(
+            "[PEAK %s] IQ I=%5d Q=%5d | Aud=%5d | WS=%5d | OUT=%5d\n",
+            alert ? "alert" : "warning",
+            peakIDec,
+            peakQDec,
+            peakAudio,
+            peakWebAudio,
+            peakAudioOut
+          );
+        //}
 
       peakIDec = peakQDec = peakAudio = peakWebAudio = peakAudioOut = 0;
       peakLastMs = si5351_now;
@@ -400,642 +403,539 @@ static void processAudioPCM1808_simulatedIQ() {
     }
 }
 
-static void processAudioTest() {
-  static CicFilter32 cic;
-  static int32_t i_dc = 0;
-  static int32_t q_dc = 0;
+// static void processAudioTest() {
+//   static CicFilter32 cic;
+//   static int32_t i_dc = 0;
+//   static int32_t q_dc = 0;
 
-  // --- Timing Debug Variables ---
-  static uint32_t rawSampleCount = 0;
-  static uint32_t lastReportMs = 0;
-  uint32_t si5351_now = millis();
+//   // --- Timing Debug Variables ---
+//   static uint32_t rawSampleCount = 0;
+//   static uint32_t lastReportMs = 0;
+//   uint32_t si5351_now = millis();
 
-  // 1. Process all samples currently waiting in the ADC buffer
-  while (iq_adc_ready() && iq_adc_available() > 0) {
-    IqSample sample = iq_adc_read_iq();
-    rawSampleCount++; // Count every raw 32kHz IQ pair
-    // 2. Feed the raw ADC samples into the CIC filter
-    if (cic.processSample(sample.i, sample.q)) {
+//   // 1. Process all samples currently waiting in the ADC buffer
+//   while (iq_adc_ready() && iq_adc_available() > 0) {
+//     IqSample sample = iq_adc_read_iq();
+//     rawSampleCount++; // Count every raw 32kHz IQ pair
+//     // 2. Feed the raw ADC samples into the CIC filter
+//     if (cic.processSample(sample.i, sample.q)) {
       
-      // 3. Extract decimated samples (8kHz)
-      // Note: We use >> 6 for CIC gain correction. 
-      // If the volume is too low, we can change this to >> 2 or >> 0 later.
-      int16_t iDecimated = (int16_t)(cic.getOutputI() >> 7);
-      int16_t qDecimated = (int16_t)(cic.getOutputQ() >> 7);
+//       // 3. Extract decimated samples (8kHz)
+//       // Note: We use >> 6 for CIC gain correction. 
+//       // If the volume is too low, we can change this to >> 2 or >> 0 later.
+//       int16_t iDecimated = (int16_t)(cic.getOutputI() >> 7);
+//       int16_t qDecimated = (int16_t)(cic.getOutputQ() >> 7);
 
-      UiMode uiMode = ui_get_mode();
-      DemodMode demodMode = ui_mode_to_demod_mode(uiMode);
+//       UiMode uiMode = ui_get_mode();
+//       DemodMode demodMode = ui_mode_to_demod_mode(uiMode);
 
-      // 4. DC Removal (Crucial for real hardware to prevent 'hum' or 'thump')
-      if (demodMode != DEMOD_AM) {
-        i_dc += (((int32_t)iDecimated << 8) - i_dc) >> 8;
-        q_dc += (((int32_t)qDecimated << 8) - q_dc) >> 8;
-        iDecimated = iDecimated - (i_dc >> 8);
-        qDecimated = qDecimated - (q_dc >> 8);
-      }
+//       // 4. DC Removal (Crucial for real hardware to prevent 'hum' or 'thump')
+//       if (demodMode != DEMOD_AM) {
+//         i_dc += (((int32_t)iDecimated << 8) - i_dc) >> 8;
+//         q_dc += (((int32_t)qDecimated << 8) - q_dc) >> 8;
+//         iDecimated = iDecimated - (i_dc >> 8);
+//         qDecimated = qDecimated - (q_dc >> 8);
+//       }
 
-      // 5. Apply your working Demodulator
-      int16_t audioSample = demod_process(iDecimated, qDecimated, demodMode);
+//       // 5. Apply your working Demodulator
+//       int16_t audioSample = demod_process(iDecimated, qDecimated, demodMode);
 
-      // Send to websocket audio stream before volume scaling
-      wifi_config_audio_push(lastSynth.vfoHz, 16 * audioSample); // amplify 16x also
+//       // Send to websocket audio stream before volume scaling
+//       wifi_config_audio_push(lastSynth.vfoHz, 16 * audioSample); // amplify 16x also
 
-      // 6. Volume Control
-      int32_t loudAudio = (int32_t)audioSample; 
-      loudAudio = (loudAudio * audioVolume) ;
+//       // 6. Volume Control
+//       int32_t loudAudio = (int32_t)audioSample; 
+//       loudAudio = (loudAudio * audioVolume) ;
 
-      // Limit/Clip to prevent I2S crackling
-      if (loudAudio > 32767) loudAudio = 32767;
-      if (loudAudio < -32768) loudAudio = -32768;
+//       // Limit/Clip to prevent I2S crackling
+//       if (loudAudio > 32767) loudAudio = 32767;
+//       if (loudAudio < -32768) loudAudio = -32768;
 
-      // 7. Output to I2S
-      audio_i2s_write_sample((int16_t)loudAudio);
-    }
+//       // 7. Output to I2S
+//       audio_i2s_write_sample((int16_t)loudAudio);
+//     }
 
-      // --- Periodic Sample Rate Print ---
-    if (si5351_now - lastReportMs >= 1000) {
-      // Calculate rate based on actual elapsed time for accuracy
-      float elapsedSec = (si5351_now - lastReportMs) / 1000.0f;
-      float rate = rawSampleCount / elapsedSec;
+//       // --- Periodic Sample Rate Print ---
+//     if (si5351_now - lastReportMs >= 1000) {
+//       // Calculate rate based on actual elapsed time for accuracy
+//       float elapsedSec = (si5351_now - lastReportMs) / 1000.0f;
+//       float rate = rawSampleCount / elapsedSec;
       
-      // Serial.printf("[ADC Stats] Raw Rate: %.1f Hz | Target: 32000 Hz | Audio Rate: %.1f Hz\n", 
-      //               rate, rate / 4.0f);
+//       // Serial.printf("[ADC Stats] Raw Rate: %.1f Hz | Target: 32000 Hz | Audio Rate: %.1f Hz\n", 
+//       //               rate, rate / 4.0f);
       
-      rawSampleCount = 0;
-      lastReportMs = si5351_now;
-    }
-  }
-}
+//       rawSampleCount = 0;
+//       lastReportMs = si5351_now;
+//     }
+//   }
+// }
 
 // Audio processing with CIC decimation, Hilbert transform and LSB/USB/CW/AM/FM demodulation
-static void processAudioTest_ori() {
-  static CicFilter cic;
-  static uint32_t audioSampleCount = 0;
-  static uint32_t iqPairCount = 0;
-  static uint32_t lastAudioDebugMs = 0;
-  static int16_t lastAudioSample = 0;  // For interpolation
+// static void processAudioTest_ori() {
+//   static CicFilter cic;
+//   static uint32_t audioSampleCount = 0;
+//   static uint32_t iqPairCount = 0;
+//   static uint32_t lastAudioDebugMs = 0;
+//   static int16_t lastAudioSample = 0;  // For interpolation
   
-  static uint32_t lastTestBlockMs = 0;
-  // Only generate a new block every 4ms (to match 32kHz rate)
-  if (millis() - lastTestBlockMs < 4) {
-    return; // Exit early, it's not time for new data yet
-  }
-  lastTestBlockMs = millis();
+//   static uint32_t lastTestBlockMs = 0;
+//   // Only generate a new block every 4ms (to match 32kHz rate)
+//   if (millis() - lastTestBlockMs < 4) {
+//     return; // Exit early, it's not time for new data yet
+//   }
+//   lastTestBlockMs = millis();
 
-  // DC removal state for I and Q channels
-  static int32_t i_dc = 0;
-  static int32_t q_dc = 0;
+//   // DC removal state for I and Q channels
+//   static int32_t i_dc = 0;
+//   static int32_t q_dc = 0;
   
-  // Process ALL available IQ samples from ADC (or internal test source)
-#if AM_TEST_MODE
-  static float test_car_phase = 0.0f;
-  static float test_mod_phase = 0.0f;
-  const float car_step = 2.0f * (float)M_PI * AM_TEST_CARRIER_HZ / 32000.0f;
-  const float mod_step = 2.0f * (float)M_PI * AM_TEST_MOD_HZ / 32000.0f;
+//   // Process ALL available IQ samples from ADC (or internal test source)
+// #if AM_TEST_MODE
+//   static float test_car_phase = 0.0f;
+//   static float test_mod_phase = 0.0f;
+//   const float car_step = 2.0f * (float)M_PI * AM_TEST_CARRIER_HZ / 32000.0f;
+//   const float mod_step = 2.0f * (float)M_PI * AM_TEST_MOD_HZ / 32000.0f;
 
-  // static uint32_t lastTestBlockMs = 0;
-  // // Only generate a new block every 4ms (to match 32kHz rate)
-  // if (millis() - lastTestBlockMs < 4) {
-  //   return; // Exit early, it's not time for new data yet
-  // }
-  // lastTestBlockMs = millis();
+//   // static uint32_t lastTestBlockMs = 0;
+//   // // Only generate a new block every 4ms (to match 32kHz rate)
+//   // if (millis() - lastTestBlockMs < 4) {
+//   //   return; // Exit early, it's not time for new data yet
+//   // }
+//   // lastTestBlockMs = millis();
 
-  // for (uint16_t n = 0; n < 128; ++n) {
-  //   const float env = 1.0f + AM_TEST_DEPTH * sinf(test_mod_phase);
-  //   const float i_f = env * sinf(test_car_phase) * AM_TEST_AMPLITUDE;
-  //   const float q_f = env * cosf(test_car_phase) * AM_TEST_AMPLITUDE;
-  //   IqSample sample = { (int16_t)i_f, (int16_t)q_f };
-  //   test_car_phase += car_step;
-  //   test_mod_phase += mod_step;
-  //   if (test_car_phase > 2.0f * (float)M_PI) test_car_phase -= 2.0f * (float)M_PI;
-  //   if (test_mod_phase > 2.0f * (float)M_PI) test_mod_phase -= 2.0f * (float)M_PI;
-  //   iqPairCount++;
+//   // for (uint16_t n = 0; n < 128; ++n) {
+//   //   const float env = 1.0f + AM_TEST_DEPTH * sinf(test_mod_phase);
+//   //   const float i_f = env * sinf(test_car_phase) * AM_TEST_AMPLITUDE;
+//   //   const float q_f = env * cosf(test_car_phase) * AM_TEST_AMPLITUDE;
+//   //   IqSample sample = { (int16_t)i_f, (int16_t)q_f };
+//   //   test_car_phase += car_step;
+//   //   test_mod_phase += mod_step;
+//   //   if (test_car_phase > 2.0f * (float)M_PI) test_car_phase -= 2.0f * (float)M_PI;
+//   //   if (test_mod_phase > 2.0f * (float)M_PI) test_mod_phase -= 2.0f * (float)M_PI;
+//   //   iqPairCount++;
 
-  for (uint16_t n = 0; n < 128; ++n) {
-    // 1. Generate clean floating point samples
-    float i_f = cosf(test_car_phase) * AM_TEST_AMPLITUDE;
-    float q_f = sinf(test_car_phase) * AM_TEST_AMPLITUDE; // Use SIN for Q
+//   for (uint16_t n = 0; n < 128; ++n) {
+//     // 1. Generate clean floating point samples
+//     float i_f = cosf(test_car_phase) * AM_TEST_AMPLITUDE;
+//     float q_f = sinf(test_car_phase) * AM_TEST_AMPLITUDE; // Use SIN for Q
     
-    // 2. Increment phase
-    test_car_phase += car_step;
-    if (test_car_phase > 2.0f * (float)M_PI) test_car_phase -= 2.0f * (float)M_PI;
+//     // 2. Increment phase
+//     test_car_phase += car_step;
+//     if (test_car_phase > 2.0f * (float)M_PI) test_car_phase -= 2.0f * (float)M_PI;
 
-    // 3. IMMEDIATELY pass into CIC (do not store in a local variable first)
-    //if (cic.processSample((int16_t)i_f, (int16_t)q_f)) {
-        // int16_t iDec = (int16_t)(cic.getOutputI() >> 6);
-        // int16_t qDec = (int16_t)(cic.getOutputQ() >> 6);
+//     // 3. IMMEDIATELY pass into CIC (do not store in a local variable first)
+//     //if (cic.processSample((int16_t)i_f, (int16_t)q_f)) {
+//         // int16_t iDec = (int16_t)(cic.getOutputI() >> 6);
+//         // int16_t qDec = (int16_t)(cic.getOutputQ() >> 6);
         
-        // 4. Bypass DC removal and Phase Correction for this test
+//         // 4. Bypass DC removal and Phase Correction for this test
         
      
 
-        int16_t audio = demod_process((int16_t)i_f,(int16_t) q_f, DEMOD_LSB);
+//         int16_t audio = demod_process((int16_t)i_f,(int16_t) q_f, DEMOD_LSB);
         
-        // Write directly to I2S
-        audio_i2s_write_sample(audio);
+//         // Write directly to I2S
+//         audio_i2s_write_sample(audio);
     
 
-    IqSample sample = { (int16_t)0, (int16_t)0 };
-  //  
-#else
-  while (iq_adc_ready() && iq_adc_available() > 0) {
-    IqSample sample = iq_adc_read_iq();
-    iqPairCount++;
-#endif
+//     IqSample sample = { (int16_t)0, (int16_t)0 };
+//   //  
+// #else
+//   while (iq_adc_ready() && iq_adc_available() > 0) {
+//     IqSample sample = iq_adc_read_iq();
+//     iqPairCount++;
+// #endif
 
-    // // Waterfall capture at 32kHz IQ (128-point FFT -> 128 bins across 32kHz)
-    // // Throttle updates to reduce CPU load.
-    // static int16_t wf_i[128];
-    // static int16_t wf_q[128];
-    // static uint8_t wf_idx = 0;
-    // static uint8_t wf_skip = 0;
-    // wf_i[wf_idx] = sample.i;
-    // wf_q[wf_idx] = sample.q;
-    // wf_idx++;
-    // if (wf_idx >= 128) {
-    //   wf_idx = 0;
-    //   wf_skip = (uint8_t)((wf_skip + 1) & 0x1F); // update every 32 blocks
-    //   if (wf_skip == 0) {
-    //     static bool fft_init = false;
-    //     static float tw_re[64];
-    //     static float tw_im[64];
-    //     if (!fft_init) {
-    //       for (uint16_t k = 0; k < 64; ++k) {
-    //         const float ang = -2.0f * (float)M_PI * (float)k / 128.0f;
-    //         tw_re[k] = cosf(ang);
-    //         tw_im[k] = sinf(ang);
-    //       }
-    //       fft_init = true;
-    //     }
+//     // // Waterfall capture at 32kHz IQ (128-point FFT -> 128 bins across 32kHz)
+//     // // Throttle updates to reduce CPU load.
+//     // static int16_t wf_i[128];
+//     // static int16_t wf_q[128];
+//     // static uint8_t wf_idx = 0;
+//     // static uint8_t wf_skip = 0;
+//     // wf_i[wf_idx] = sample.i;
+//     // wf_q[wf_idx] = sample.q;
+//     // wf_idx++;
+//     // if (wf_idx >= 128) {
+//     //   wf_idx = 0;
+//     //   wf_skip = (uint8_t)((wf_skip + 1) & 0x1F); // update every 32 blocks
+//     //   if (wf_skip == 0) {
+//     //     static bool fft_init = false;
+//     //     static float tw_re[64];
+//     //     static float tw_im[64];
+//     //     if (!fft_init) {
+//     //       for (uint16_t k = 0; k < 64; ++k) {
+//     //         const float ang = -2.0f * (float)M_PI * (float)k / 128.0f;
+//     //         tw_re[k] = cosf(ang);
+//     //         tw_im[k] = sinf(ang);
+//     //       }
+//     //       fft_init = true;
+//     //     }
 
-    //     float re[128];
-    //     float im[128];
-    //     for (uint16_t n = 0; n < 128; ++n) {
-    //       re[n] = (float)wf_i[n];
-    //       im[n] = (float)wf_q[n];
-    //     }
+//     //     float re[128];
+//     //     float im[128];
+//     //     for (uint16_t n = 0; n < 128; ++n) {
+//     //       re[n] = (float)wf_i[n];
+//     //       im[n] = (float)wf_q[n];
+//     //     }
 
-    //     // bit reversal
-    //     for (uint16_t i = 0; i < 128; ++i) {
-    //       uint8_t x = (uint8_t)i;
-    //       x = (uint8_t)(((x & 0x55u) << 1) | ((x & 0xAAu) >> 1));
-    //       x = (uint8_t)(((x & 0x33u) << 2) | ((x & 0xCCu) >> 2));
-    //       x = (uint8_t)(((x & 0x0Fu) << 4) | ((x & 0xF0u) >> 4));
-    //       uint8_t j = (uint8_t)(x >> 1); // 7-bit reversal
-    //       if (j > i) {
-    //         float tr = re[i]; re[i] = re[j]; re[j] = tr;
-    //         float ti = im[i]; im[i] = im[j]; im[j] = ti;
-    //       }
-    //     }
+//     //     // bit reversal
+//     //     for (uint16_t i = 0; i < 128; ++i) {
+//     //       uint8_t x = (uint8_t)i;
+//     //       x = (uint8_t)(((x & 0x55u) << 1) | ((x & 0xAAu) >> 1));
+//     //       x = (uint8_t)(((x & 0x33u) << 2) | ((x & 0xCCu) >> 2));
+//     //       x = (uint8_t)(((x & 0x0Fu) << 4) | ((x & 0xF0u) >> 4));
+//     //       uint8_t j = (uint8_t)(x >> 1); // 7-bit reversal
+//     //       if (j > i) {
+//     //         float tr = re[i]; re[i] = re[j]; re[j] = tr;
+//     //         float ti = im[i]; im[i] = im[j]; im[j] = ti;
+//     //       }
+//     //     }
 
-    //     // radix-2 FFT
-    //     for (uint16_t m = 2; m <= 128; m <<= 1) {
-    //       const uint16_t half = m >> 1;
-    //       const uint16_t step = 128 / m;
-    //       for (uint16_t k = 0; k < 128; k += m) {
-    //         for (uint16_t j = 0; j < half; ++j) {
-    //           const uint16_t tw = j * step;
-    //           const float wr = tw_re[tw];
-    //           const float wi = tw_im[tw];
-    //           const uint16_t idx = k + j + half;
-    //           const float tr = wr * re[idx] - wi * im[idx];
-    //           const float ti = wr * im[idx] + wi * re[idx];
-    //           const float ur = re[k + j];
-    //           const float ui = im[k + j];
-    //           re[k + j] = ur + tr;
-    //           im[k + j] = ui + ti;
-    //           re[idx] = ur - tr;
-    //           im[idx] = ui - ti;
-    //         }
-    //       }
-    //     }
+//     //     // radix-2 FFT
+//     //     for (uint16_t m = 2; m <= 128; m <<= 1) {
+//     //       const uint16_t half = m >> 1;
+//     //       const uint16_t step = 128 / m;
+//     //       for (uint16_t k = 0; k < 128; k += m) {
+//     //         for (uint16_t j = 0; j < half; ++j) {
+//     //           const uint16_t tw = j * step;
+//     //           const float wr = tw_re[tw];
+//     //           const float wi = tw_im[tw];
+//     //           const uint16_t idx = k + j + half;
+//     //           const float tr = wr * re[idx] - wi * im[idx];
+//     //           const float ti = wr * im[idx] + wi * re[idx];
+//     //           const float ur = re[k + j];
+//     //           const float ui = im[k + j];
+//     //           re[k + j] = ur + tr;
+//     //           im[k + j] = ui + ti;
+//     //           re[idx] = ur - tr;
+//     //           im[idx] = ui - ti;
+//     //         }
+//     //       }
+//     //     }
 
-    //     float maxMag = 1.0f;
-    //     float mags[128];
-    //     for (uint16_t k = 0; k < 128; ++k) {
-    //       const float mag = re[k] * re[k] + im[k] * im[k];
-    //       mags[k] = mag;
-    //       if (mag > maxMag) maxMag = mag;
-    //     }
+//     //     float maxMag = 1.0f;
+//     //     float mags[128];
+//     //     for (uint16_t k = 0; k < 128; ++k) {
+//     //       const float mag = re[k] * re[k] + im[k] * im[k];
+//     //       mags[k] = mag;
+//     //       if (mag > maxMag) maxMag = mag;
+//     //     }
 
-    //     uint8_t bins[128];
-    //     for (uint16_t x = 0; x < 128; ++x) {
-    //       const uint16_t bin = (x + 64) & 127; // fftshift
-    //       float v = mags[bin] / maxMag;
-    //       if (v < 1e-6f) v = 1e-6f;
-    //       if (v > 1.0f) v = 1.0f;
-    //       // Log scaling (compress dynamic range) with tunable floor
-    //       float vdb = log10f(v) + 6.0f; // maps 1e-6..1 -> 0..6
-    //       float norm = vdb / 6.0f;
-    //       float thresh = ui_get_wf_thresh() / 100.0f;
-    //       if (norm < thresh) norm = 0.0f;
-    //       uint8_t level = (uint8_t)(norm * 15.0f + 0.5f);
-    //       if (level > 15) level = 15;
-    //       bins[x] = level;
-    //     }
-    //     ui_set_waterfall_line(bins, 128);
-    //   }
-    // }
+//     //     uint8_t bins[128];
+//     //     for (uint16_t x = 0; x < 128; ++x) {
+//     //       const uint16_t bin = (x + 64) & 127; // fftshift
+//     //       float v = mags[bin] / maxMag;
+//     //       if (v < 1e-6f) v = 1e-6f;
+//     //       if (v > 1.0f) v = 1.0f;
+//     //       // Log scaling (compress dynamic range) with tunable floor
+//     //       float vdb = log10f(v) + 6.0f; // maps 1e-6..1 -> 0..6
+//     //       float norm = vdb / 6.0f;
+//     //       float thresh = ui_get_wf_thresh() / 100.0f;
+//     //       if (norm < thresh) norm = 0.0f;
+//     //       uint8_t level = (uint8_t)(norm * 15.0f + 0.5f);
+//     //       if (level > 15) level = 15;
+//     //       bins[x] = level;
+//     //     }
+//     //     ui_set_waterfall_line(bins, 128);
+//     //   }
+//     // }
     
-    // Apply CIC decimating filter (decimation by 4: 32kHz → 8kHz)
-    if (cic.processSample(sample.i, sample.q)) {
-      // CIC filter has produced decimated output at 8kHz
-      // Scale down: CIC gain is R^N = 4^3 = 64
-      int16_t iDecimated = (int16_t)(cic.getOutputI() >> 6);
-      int16_t qDecimated = (int16_t)(cic.getOutputQ() >> 6);
+//     // Apply CIC decimating filter (decimation by 4: 32kHz → 8kHz)
+//     if (cic.processSample(sample.i, sample.q)) {
+//       // CIC filter has produced decimated output at 8kHz
+//       // Scale down: CIC gain is R^N = 4^3 = 64
+//       int16_t iDecimated = (int16_t)(cic.getOutputI() >> 6);
+//       int16_t qDecimated = (int16_t)(cic.getOutputQ() >> 6);
 
-      // Get current mode from UI early (needed for AM DC handling)
-      UiMode uiMode = ui_get_mode();
-      DemodMode demodMode = ui_mode_to_demod_mode(uiMode);
+//       // Get current mode from UI early (needed for AM DC handling)
+//       UiMode uiMode = ui_get_mode();
+//       DemodMode demodMode = ui_mode_to_demod_mode(uiMode);
 
-      // DC removal (high-pass filter)
-      // Uses slow-moving average to track DC component
-      int16_t iClean = iDecimated;
-      int16_t qClean = qDecimated;
-      if (demodMode != DEMOD_AM) {
-        i_dc += (((int32_t)iDecimated << 8) - i_dc) >> 8;  // Time constant ~256 samples
-        q_dc += (((int32_t)qDecimated << 8) - q_dc) >> 8;
+//       // DC removal (high-pass filter)
+//       // Uses slow-moving average to track DC component
+//       int16_t iClean = iDecimated;
+//       int16_t qClean = qDecimated;
+//       if (demodMode != DEMOD_AM) {
+//         i_dc += (((int32_t)iDecimated << 8) - i_dc) >> 8;  // Time constant ~256 samples
+//         q_dc += (((int32_t)qDecimated << 8) - q_dc) >> 8;
         
-        // Remove DC offset
-        iClean = iDecimated - (i_dc >> 8);
-        qClean = qDecimated - (q_dc >> 8);
-      }
+//         // Remove DC offset
+//         iClean = iDecimated - (i_dc >> 8);
+//         qClean = qDecimated - (q_dc >> 8);
+//       }
 
-      // Fractional-sample timing skew correction (IQ Delay)
-      // Positive delay => delay Q by d samples; Negative delay => delay I by |d| samples
-      static int16_t prevI = 0;
-      static int16_t prevQ = 0;
-      const int16_t rawI = iClean;
-      const int16_t rawQ = qClean;
-#if !AM_TEST_MODE
-      const float d = ui_get_iq_delay(); // -0.50 .. +0.50
-      if (d > 0.0f) {
-        qClean = (int16_t)((1.0f - d) * rawQ + d * prevQ);
-      } else if (d < 0.0f) {
-        const float ad = -d;
-        iClean = (int16_t)((1.0f - ad) * rawI + ad * prevI);
-      }
-#endif
-      prevI = rawI;
-      prevQ = rawQ;
+//       // Fractional-sample timing skew correction (IQ Delay)
+//       // Positive delay => delay Q by d samples; Negative delay => delay I by |d| samples
+//       static int16_t prevI = 0;
+//       static int16_t prevQ = 0;
+//       const int16_t rawI = iClean;
+//       const int16_t rawQ = qClean;
+// #if !AM_TEST_MODE
+//       const float d = ui_get_iq_delay(); // -0.50 .. +0.50
+//       if (d > 0.0f) {
+//         qClean = (int16_t)((1.0f - d) * rawQ + d * prevQ);
+//       } else if (d < 0.0f) {
+//         const float ad = -d;
+//         iClean = (int16_t)((1.0f - ad) * rawI + ad * prevI);
+//       }
+// #endif
+//       prevI = rawI;
+//       prevQ = rawQ;
 
-  #if IQ_MEASURE_LOG
-      // Image rejection measurement right after ADC + DC removal (8 kHz domain)
-      // Computes complex tone power at +1 kHz and -1 kHz.
-      static double ir_sum_re_pos = 0.0;
-      static double ir_sum_im_pos = 0.0;
-      static double ir_sum_re_neg = 0.0;
-      static double ir_sum_im_neg = 0.0;
-      static uint32_t ir_count = 0;
-      static float ir_cos = 1.0f;
-      static float ir_sin = 0.0f;
-      static const float ir_cos_step = 0.70710678f; // cos(2*pi*1000/8000)
-      static const float ir_sin_step = 0.70710678f; // sin(2*pi*1000/8000)
+//   #if IQ_MEASURE_LOG
+//       // Image rejection measurement right after ADC + DC removal (8 kHz domain)
+//       // Computes complex tone power at +1 kHz and -1 kHz.
+//       static double ir_sum_re_pos = 0.0;
+//       static double ir_sum_im_pos = 0.0;
+//       static double ir_sum_re_neg = 0.0;
+//       static double ir_sum_im_neg = 0.0;
+//       static uint32_t ir_count = 0;
+//       static float ir_cos = 1.0f;
+//       static float ir_sin = 0.0f;
+//       static const float ir_cos_step = 0.70710678f; // cos(2*pi*1000/8000)
+//       static const float ir_sin_step = 0.70710678f; // sin(2*pi*1000/8000)
 
-      // Mix to +1 kHz: (I + jQ) * (cos - j sin)
-      float mix_re_pos = iClean * ir_cos + qClean * ir_sin;
-      float mix_im_pos = qClean * ir_cos - iClean * ir_sin;
+//       // Mix to +1 kHz: (I + jQ) * (cos - j sin)
+//       float mix_re_pos = iClean * ir_cos + qClean * ir_sin;
+//       float mix_im_pos = qClean * ir_cos - iClean * ir_sin;
 
-      // Mix to -1 kHz: (I + jQ) * (cos + j sin)
-      float mix_re_neg = iClean * ir_cos - qClean * ir_sin;
-      float mix_im_neg = qClean * ir_cos + iClean * ir_sin;
+//       // Mix to -1 kHz: (I + jQ) * (cos + j sin)
+//       float mix_re_neg = iClean * ir_cos - qClean * ir_sin;
+//       float mix_im_neg = qClean * ir_cos + iClean * ir_sin;
 
-      ir_sum_re_pos += mix_re_pos;
-      ir_sum_im_pos += mix_im_pos;
-      ir_sum_re_neg += mix_re_neg;
-      ir_sum_im_neg += mix_im_neg;
-      ir_count++;
+//       ir_sum_re_pos += mix_re_pos;
+//       ir_sum_im_pos += mix_im_pos;
+//       ir_sum_re_neg += mix_re_neg;
+//       ir_sum_im_neg += mix_im_neg;
+//       ir_count++;
 
-      // Update oscillator for next sample
-      float next_cos = ir_cos * ir_cos_step - ir_sin * ir_sin_step;
-      float next_sin = ir_sin * ir_cos_step + ir_cos * ir_sin_step;
-      ir_cos = next_cos;
-      ir_sin = next_sin;
+//       // Update oscillator for next sample
+//       float next_cos = ir_cos * ir_cos_step - ir_sin * ir_sin_step;
+//       float next_sin = ir_sin * ir_cos_step + ir_cos * ir_sin_step;
+//       ir_cos = next_cos;
+//       ir_sin = next_sin;
 
-      if (ir_count >= 4096) { // ~0.512s at 8kHz
-        double p_pos = ir_sum_re_pos * ir_sum_re_pos + ir_sum_im_pos * ir_sum_im_pos;
-        double p_neg = ir_sum_re_neg * ir_sum_re_neg + ir_sum_im_neg * ir_sum_im_neg;
-        double strong = (p_pos > p_neg) ? p_pos : p_neg;
-        double weak = (p_pos > p_neg) ? p_neg : p_pos;
-        double ratio = (strong + 1e-12) / (weak + 1e-12);
-        double ratio_db = 10.0 * log10(ratio);
-        const char* strong_label = (p_pos > p_neg) ? "+1k" : "-1k";
-        Serial.printf("[Image Reject @1k] +1k=%.3e -1k=%.3e strong=%s ratio=%.2f dB (%.3fx)\n",
-                      p_pos, p_neg, strong_label, ratio_db, ratio);
+//       if (ir_count >= 4096) { // ~0.512s at 8kHz
+//         double p_pos = ir_sum_re_pos * ir_sum_re_pos + ir_sum_im_pos * ir_sum_im_pos;
+//         double p_neg = ir_sum_re_neg * ir_sum_re_neg + ir_sum_im_neg * ir_sum_im_neg;
+//         double strong = (p_pos > p_neg) ? p_pos : p_neg;
+//         double weak = (p_pos > p_neg) ? p_neg : p_pos;
+//         double ratio = (strong + 1e-12) / (weak + 1e-12);
+//         double ratio_db = 10.0 * log10(ratio);
+//         const char* strong_label = (p_pos > p_neg) ? "+1k" : "-1k";
+//         Serial.printf("[Image Reject @1k] +1k=%.3e -1k=%.3e strong=%s ratio=%.2f dB (%.3fx)\n",
+//                       p_pos, p_neg, strong_label, ratio_db, ratio);
 
-        ir_sum_re_pos = 0.0;
-        ir_sum_im_pos = 0.0;
-        ir_sum_re_neg = 0.0;
-        ir_sum_im_neg = 0.0;
-        ir_count = 0;
-      }
-  #endif
+//         ir_sum_re_pos = 0.0;
+//         ir_sum_im_pos = 0.0;
+//         ir_sum_re_neg = 0.0;
+//         ir_sum_im_neg = 0.0;
+//         ir_count = 0;
+//       }
+//   #endif
       
-      // Apply IQ phase correction FIRST (right after DC removal)
-      // Phase correction: rotate I/Q by (iq_phase - 90) degrees
-      // I' = I*cos(θ) - Q*sin(θ), Q' = I*sin(θ) + Q*cos(θ)
-      int16_t phase_deg = ui_get_iq_phase();
-    #if !AM_TEST_MODE
-      float phase_error_rad = (90 - phase_deg) * 0.0174533f; // Convert to radians (invert correction direction)
-      float cos_theta = cosf(phase_error_rad);
-      float sin_theta = sinf(phase_error_rad);
+//       // Apply IQ phase correction FIRST (right after DC removal)
+//       // Phase correction: rotate I/Q by (iq_phase - 90) degrees
+//       // I' = I*cos(θ) - Q*sin(θ), Q' = I*sin(θ) + Q*cos(θ)
+//       int16_t phase_deg = ui_get_iq_phase();
+//     #if !AM_TEST_MODE
+//       float phase_error_rad = (90 - phase_deg) * 0.0174533f; // Convert to radians (invert correction direction)
+//       float cos_theta = cosf(phase_error_rad);
+//       float sin_theta = sinf(phase_error_rad);
       
-      int16_t iPhased = (int16_t)(iClean * cos_theta - qClean * sin_theta);
-      int16_t qPhased = (int16_t)(iClean * sin_theta + qClean * cos_theta);
-      iClean = iPhased;
-      qClean = qPhased;
-    #endif
+//       int16_t iPhased = (int16_t)(iClean * cos_theta - qClean * sin_theta);
+//       int16_t qPhased = (int16_t)(iClean * sin_theta + qClean * cos_theta);
+//       iClean = iPhased;
+//       qClean = qPhased;
+//     #endif
       
-    #if IQ_MEASURE_LOG
-      // Measure after phase correction, before amplitude balance
-      static int64_t i_sum_sq_pre = 0;
-      static int64_t q_sum_sq_pre = 0;
-      static int64_t iq_cross_pre = 0;
-      static uint32_t measure_count = 0;
+//     #if IQ_MEASURE_LOG
+//       // Measure after phase correction, before amplitude balance
+//       static int64_t i_sum_sq_pre = 0;
+//       static int64_t q_sum_sq_pre = 0;
+//       static int64_t iq_cross_pre = 0;
+//       static uint32_t measure_count = 0;
 
-      i_sum_sq_pre += (int32_t)iClean * iClean;
-      q_sum_sq_pre += (int32_t)qClean * qClean;
-      iq_cross_pre += (int32_t)iClean * qClean;
-      measure_count++;
-    #endif
+//       i_sum_sq_pre += (int32_t)iClean * iClean;
+//       q_sum_sq_pre += (int32_t)qClean * qClean;
+//       iq_cross_pre += (int32_t)iClean * qClean;
+//       measure_count++;
+//     #endif
       
-      // THEN apply amplitude balance
-      float iq_balance = ui_get_iq_balance();
-    #if !AM_TEST_MODE
-      qClean = (int16_t)(qClean * iq_balance);
-    #endif
+//       // THEN apply amplitude balance
+//       float iq_balance = ui_get_iq_balance();
+//     #if !AM_TEST_MODE
+//       qClean = (int16_t)(qClean * iq_balance);
+//     #endif
       
-#if IQ_MEASURE_LOG
-      if(measure_count >= 8000) {  // Every second at 8kHz
-        float i_rms_pre = sqrtf(i_sum_sq_pre / (float)measure_count);
-        float q_rms_pre = sqrtf(q_sum_sq_pre / (float)measure_count);
-        float ratio_pre = q_rms_pre / (i_rms_pre + 0.001f);
+// #if IQ_MEASURE_LOG
+//       if(measure_count >= 8000) {  // Every second at 8kHz
+//         float i_rms_pre = sqrtf(i_sum_sq_pre / (float)measure_count);
+//         float q_rms_pre = sqrtf(q_sum_sq_pre / (float)measure_count);
+//         float ratio_pre = q_rms_pre / (i_rms_pre + 0.001f);
 
-        // Phase estimate from I*Q correlation (after phase correction)
-        float iq_corr_pre = iq_cross_pre / (float)measure_count;
-        float phase_pre = asinf(iq_corr_pre / (i_rms_pre * q_rms_pre + 0.001f)) * 57.2958f;
+//         // Phase estimate from I*Q correlation (after phase correction)
+//         float iq_corr_pre = iq_cross_pre / (float)measure_count;
+//         float phase_pre = asinf(iq_corr_pre / (i_rms_pre * q_rms_pre + 0.001f)) * 57.2958f;
 
-        // Post-balance amplitude ratio (apply balance factor to Q RMS)
-        float ratio_post = (q_rms_pre * iq_balance) / (i_rms_pre + 0.001f);
+//         // Post-balance amplitude ratio (apply balance factor to Q RMS)
+//         float ratio_post = (q_rms_pre * iq_balance) / (i_rms_pre + 0.001f);
 
-        Serial.printf("[After Phase Correction] Amp ratio=%.3f, Phase deviation=%.1f deg\n",
-                      ratio_pre, phase_pre);
-        Serial.printf("[After Balance] Amp ratio=%.3f\n", ratio_post);
-        Serial.printf("[Settings] IQ Bal=%d, IQ Phase=%d\n",
-                      (int)(iq_balance * 100), phase_deg);
+//         Serial.printf("[After Phase Correction] Amp ratio=%.3f, Phase deviation=%.1f deg\n",
+//                       ratio_pre, phase_pre);
+//         Serial.printf("[After Balance] Amp ratio=%.3f\n", ratio_post);
+//         Serial.printf("[Settings] IQ Bal=%d, IQ Phase=%d\n",
+//                       (int)(iq_balance * 100), phase_deg);
 
-        // Reset accumulators
-        i_sum_sq_pre = 0;
-        q_sum_sq_pre = 0;
-        iq_cross_pre = 0;
-        measure_count = 0;
-      }
-#endif
+//         // Reset accumulators
+//         i_sum_sq_pre = 0;
+//         q_sum_sq_pre = 0;
+//         iq_cross_pre = 0;
+//         measure_count = 0;
+//       }
+// #endif
 
-      // Apply Hilbert transform and demodulation
-      // Note: demod_process handles the sign conventions internally
-      int16_t demodSample = demod_process(iClean, qClean, demodMode);
-    #if AM_TEST_MODE
-      // Verify demod output: measure 1 kHz vs 2 kHz content (pre-processing)
-      static float v_cos1 = 1.0f, v_sin1 = 0.0f;
-      static float v_cos2 = 1.0f, v_sin2 = 0.0f;
-      static const float v_cos1_step = 0.70710678f; // cos(2*pi*1000/8000)
-      static const float v_sin1_step = 0.70710678f; // sin(2*pi*1000/8000)
-      static const float v_cos2_step = 0.0f;        // cos(2*pi*2000/8000)
-      static const float v_sin2_step = 1.0f;        // sin(2*pi*2000/8000)
-      static double v_re1 = 0.0, v_im1 = 0.0;
-      static double v_re2 = 0.0, v_im2 = 0.0;
-      static uint32_t v_count = 0;
+//       // Apply Hilbert transform and demodulation
+//       // Note: demod_process handles the sign conventions internally
+//       int16_t demodSample = demod_process(iClean, qClean, demodMode);
+//     #if AM_TEST_MODE
+//       // Verify demod output: measure 1 kHz vs 2 kHz content (pre-processing)
+//       static float v_cos1 = 1.0f, v_sin1 = 0.0f;
+//       static float v_cos2 = 1.0f, v_sin2 = 0.0f;
+//       static const float v_cos1_step = 0.70710678f; // cos(2*pi*1000/8000)
+//       static const float v_sin1_step = 0.70710678f; // sin(2*pi*1000/8000)
+//       static const float v_cos2_step = 0.0f;        // cos(2*pi*2000/8000)
+//       static const float v_sin2_step = 1.0f;        // sin(2*pi*2000/8000)
+//       static double v_re1 = 0.0, v_im1 = 0.0;
+//       static double v_re2 = 0.0, v_im2 = 0.0;
+//       static uint32_t v_count = 0;
 
-      v_re1 += (double)demodSample * v_cos1;
-      v_im1 += (double)demodSample * v_sin1;
-      v_re2 += (double)demodSample * v_cos2;
-      v_im2 += (double)demodSample * v_sin2;
-      v_count++;
+//       v_re1 += (double)demodSample * v_cos1;
+//       v_im1 += (double)demodSample * v_sin1;
+//       v_re2 += (double)demodSample * v_cos2;
+//       v_im2 += (double)demodSample * v_sin2;
+//       v_count++;
 
-      float next_cos1 = v_cos1 * v_cos1_step - v_sin1 * v_sin1_step;
-      float next_sin1 = v_sin1 * v_cos1_step + v_cos1 * v_sin1_step;
-      v_cos1 = next_cos1;
-      v_sin1 = next_sin1;
+//       float next_cos1 = v_cos1 * v_cos1_step - v_sin1 * v_sin1_step;
+//       float next_sin1 = v_sin1 * v_cos1_step + v_cos1 * v_sin1_step;
+//       v_cos1 = next_cos1;
+//       v_sin1 = next_sin1;
 
-      float next_cos2 = v_cos2 * v_cos2_step - v_sin2 * v_sin2_step;
-      float next_sin2 = v_sin2 * v_cos2_step + v_cos2 * v_sin2_step;
-      v_cos2 = next_cos2;
-      v_sin2 = next_sin2;
+//       float next_cos2 = v_cos2 * v_cos2_step - v_sin2 * v_sin2_step;
+//       float next_sin2 = v_sin2 * v_cos2_step + v_cos2 * v_sin2_step;
+//       v_cos2 = next_cos2;
+//       v_sin2 = next_sin2;
 
-      if (v_count >= 8000) {
-        const double p1 = v_re1 * v_re1 + v_im1 * v_im1;
-        const double p2 = v_re2 * v_re2 + v_im2 * v_im2;
-        const double ratio = (p2 + 1e-12) / (p1 + 1e-12);
-        const double ratio_db = 10.0 * log10(ratio);
-        Serial.printf("[AM Test] 1k=%.3e 2k=%.3e 2k/1k=%.2f dB\n", p1, p2, ratio_db);
-        v_re1 = v_im1 = v_re2 = v_im2 = 0.0;
-        v_count = 0;
-      }
-    #endif
-      int16_t audioSample = demodSample;
+//       if (v_count >= 8000) {
+//         const double p1 = v_re1 * v_re1 + v_im1 * v_im1;
+//         const double p2 = v_re2 * v_re2 + v_im2 * v_im2;
+//         const double ratio = (p2 + 1e-12) / (p1 + 1e-12);
+//         const double ratio_db = 10.0 * log10(ratio);
+//         Serial.printf("[AM Test] 1k=%.3e 2k=%.3e 2k/1k=%.2f dB\n", p1, p2, ratio_db);
+//         v_re1 = v_im1 = v_re2 = v_im2 = 0.0;
+//         v_count = 0;
+//       }
+//     #endif
+//       int16_t audioSample = demodSample;
 
-      // Apply UI-selected audio filter (SSB/AM/FM shared; CW narrow filters when selected)
-    #if AM_TEST_MODE
-      int8_t filt = 0;
-      int8_t cw_tone = 0;
-      int8_t volume = ui_get_volume();
-    #else
-      int8_t filt = ui_get_filter();
-      int8_t cw_tone = ui_get_cw_tone();
-      int8_t volume = ui_get_volume();
-    #endif
-      audioSample = audio_filter_apply(audioSample, filt, cw_tone);
+//       // Apply UI-selected audio filter (SSB/AM/FM shared; CW narrow filters when selected)
+//     #if AM_TEST_MODE
+//       int8_t filt = 0;
+//       int8_t cw_tone = 0;
+//       int8_t volume = ui_get_volume();
+//     #else
+//       int8_t filt = ui_get_filter();
+//       int8_t cw_tone = ui_get_cw_tone();
+//       int8_t volume = ui_get_volume();
+//     #endif
+//       audioSample = audio_filter_apply(audioSample, filt, cw_tone);
 
-      // Simple AGC after filtering/volume to reduce overload distortion
-      if (ENABLE_AGC && ui_get_agc()) {
-        const bool isSSB = (demodMode == DEMOD_LSB || demodMode == DEMOD_USB);
-        const bool isAM = (demodMode == DEMOD_AM);
-        if (isSSB) {
-          static float agc_env_ssb = 0.0f;
-          static float agc_gain_ssb = 1.0f;
+//       // Simple AGC after filtering/volume to reduce overload distortion
+//       if (ENABLE_AGC && ui_get_agc()) {
+//         const bool isSSB = (demodMode == DEMOD_LSB || demodMode == DEMOD_USB);
+//         const bool isAM = (demodMode == DEMOD_AM);
+//         if (isSSB) {
+//           static float agc_env_ssb = 0.0f;
+//           static float agc_gain_ssb = 1.0f;
 
-          float &agc_env = agc_env_ssb;
-          float &agc_gain = agc_gain_ssb;
+//           float &agc_env = agc_env_ssb;
+//           float &agc_gain = agc_gain_ssb;
 
-          const float x = fabsf((float)audioSample);
-          const float attack = 0.02f;
-          const float decay = 0.002f;
-          if (x > agc_env) agc_env += (x - agc_env) * attack;
-          else agc_env += (x - agc_env) * decay;
+//           const float x = fabsf((float)audioSample);
+//           const float attack = 0.02f;
+//           const float decay = 0.002f;
+//           if (x > agc_env) agc_env += (x - agc_env) * attack;
+//           else agc_env += (x - agc_env) * decay;
 
-          const float target = 6000.0f;
-          float g = target / (agc_env + 1.0f);
-          // SSB AGC with moderate boost
-          if (g > 2.5f) g = 2.5f;
-          if (g < 0.1f) g = 0.1f;
-          agc_gain += (g - agc_gain) * 0.01f;
-          audioSample = (int16_t)(audioSample * agc_gain);
-        } else if (isAM) {
-          static float agc_env_am = 0.0f;
-          static float agc_gain_am = 1.0f;
+//           const float target = 6000.0f;
+//           float g = target / (agc_env + 1.0f);
+//           // SSB AGC with moderate boost
+//           if (g > 2.5f) g = 2.5f;
+//           if (g < 0.1f) g = 0.1f;
+//           agc_gain += (g - agc_gain) * 0.01f;
+//           audioSample = (int16_t)(audioSample * agc_gain);
+//         } else if (isAM) {
+//           static float agc_env_am = 0.0f;
+//           static float agc_gain_am = 1.0f;
 
-          float &agc_env = agc_env_am;
-          float &agc_gain = agc_gain_am;
+//           float &agc_env = agc_env_am;
+//           float &agc_gain = agc_gain_am;
 
-          const float x = fabsf((float)audioSample);
-          const float attack = AM_AGC_ATTACK;
-          const float decay = AM_AGC_DECAY;
-          if (x > agc_env) agc_env += (x - agc_env) * attack;
-          else agc_env += (x - agc_env) * decay;
+//           const float x = fabsf((float)audioSample);
+//           const float attack = AM_AGC_ATTACK;
+//           const float decay = AM_AGC_DECAY;
+//           if (x > agc_env) agc_env += (x - agc_env) * attack;
+//           else agc_env += (x - agc_env) * decay;
 
-          const float target = AM_AGC_TARGET;
-          float g = target / (agc_env + 1.0f);
-          if (g > AM_AGC_MAX_GAIN) g = AM_AGC_MAX_GAIN;
-          if (g < AM_AGC_MIN_GAIN) g = AM_AGC_MIN_GAIN;
-          agc_gain += (g - agc_gain) * 0.02f;
-          audioSample = (int16_t)(audioSample * agc_gain);
-        }
-      }
+//           const float target = AM_AGC_TARGET;
+//           float g = target / (agc_env + 1.0f);
+//           if (g > AM_AGC_MAX_GAIN) g = AM_AGC_MAX_GAIN;
+//           if (g < AM_AGC_MIN_GAIN) g = AM_AGC_MIN_GAIN;
+//           agc_gain += (g - agc_gain) * 0.02f;
+//           audioSample = (int16_t)(audioSample * agc_gain);
+//         }
+//       }
 
-      // Send to websocket audio stream before volume scaling
-      wifi_config_audio_push(lastSynth.vfoHz, 4 * audioSample); // amplify 4x also
+//       // Send to websocket audio stream before volume scaling
+//       wifi_config_audio_push(lastSynth.vfoHz, 4 * audioSample); // amplify 4x also
 
-      // Apply volume after AGC to prevent pre-AGC overflow (volume 0-10, 2 = unity)
-      int32_t volScaled = ((int32_t)audioSample * (int32_t)volume) / 2;
-      if (volScaled > 32767) volScaled = 32767;
-      if (volScaled < -32768) volScaled = -32768;
-      audioSample = (int16_t)volScaled;
+//       // Apply volume after AGC to prevent pre-AGC overflow (volume 0-10, 2 = unity)
+//       int32_t volScaled = ((int32_t)audioSample * (int32_t)volume) / 2;
+//       if (volScaled > 32767) volScaled = 32767;
+//       if (volScaled < -32768) volScaled = -32768;
+//       audioSample = (int16_t)volScaled;
 
-#if !AM_TEST_MODE
-      // Soft limiter to avoid hard clipping distortion
-      const int16_t limit = 29000;
-      if (audioSample > limit) {
-        audioSample = limit + (audioSample - limit) / 4;
-      } else if (audioSample < -limit) {
-        audioSample = -limit + (audioSample + limit) / 4;
-      }
+// #if !AM_TEST_MODE
+//       // Soft limiter to avoid hard clipping distortion
+//       const int16_t limit = 29000;
+//       if (audioSample > limit) {
+//         audioSample = limit + (audioSample - limit) / 4;
+//       } else if (audioSample < -limit) {
+//         audioSample = -limit + (audioSample + limit) / 4;
+//       }
       
-      // Scale to reasonable audio level
-      // audioSample = audioSample >> 1;  // Divide by 2
-#endif
+//       // Scale to reasonable audio level
+//       // audioSample = audioSample >> 1;  // Divide by 2
+// #endif
       
-      // Clip to prevent overflow
-      if (audioSample > 32767) audioSample = 32767;
-      if (audioSample < -32768) audioSample = -32768;
+//       // Clip to prevent overflow
+//       if (audioSample > 32767) audioSample = 32767;
+//       if (audioSample < -32768) audioSample = -32768;
       
-      // Output at 8kHz (4kHz bandwidth)
-      // if (audio_i2s_write_sample(audioSample)) {
-      //   audioSampleCount++;
-      // }
+//       // Output at 8kHz (4kHz bandwidth)
+//       // if (audio_i2s_write_sample(audioSample)) {
+//       //   audioSampleCount++;
+//       // }
       
-    }
-#if AM_TEST_MODE
-  }
-#else
-  }
-#endif
-}
-
-
-// void setup_ori() {
-
-//   Serial.begin(115200); 
-//   delay(1000); 
-
-//   // Test PSRAM availability
-//   Serial.printf("\n=== Memory Status ===\n");
-//   Serial.printf("Total heap: %u bytes\n", ESP.getHeapSize());
-//   Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
-//   Serial.printf("PSRAM size: %u bytes\n", ESP.getPsramSize());
-//   Serial.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());
-  
-//   if (ESP.getPsramSize() > 0) {
-//     Serial.printf("PSRAM is available!\n");
-//     // Try to allocate in PSRAM
-//     void* psram_test = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM);
-//     if (psram_test) {
-//       Serial.printf("PSRAM allocation test: SUCCESS\n");
-//       heap_caps_free(psram_test);
-//     } else {
-//       Serial.printf("PSRAM allocation test: FAILED\n");
 //     }
-//   } else {
-//     Serial.printf("PSRAM is NOT available\n");
+// #if AM_TEST_MODE
 //   }
-//   Serial.printf("=====================\n\n");
-
-//   // Serial.printf("Initialize shared I2C bus once (OLED + SI5351 use the same Wire instance).\r\n");
-//   Wire.begin(I2C_SDA, I2C_SCL);
-//   Wire.setTimeOut(20);
-//   Wire.setClock(200000);
-
-//   // Load persisted UI settings before programming the synth
-//   ui_load_settings();
-  
-//   Serial.printf("Apply initial SI5351 programming based on UI state at startup.\r\n");
-//   const UiMode uiModeNow = ui_get_mode();
-//   Si5351RxSynthState si5351_now = {
-//     (uint32_t)ui_get_sifxtal(),
-//     ui_get_vfo_freq(),
-//     ui_mode_to_si5351_rx_mode(uiModeNow),
-//     ui_get_rit(),
-//     ui_get_rit_active(),
-//     ui_get_cw_offset(),
-//     ui_get_iq_phase(),
-//   };
-  
-//   Serial.printf("Initialize UI.\r\n");
-//   ui_setup();
-
-//   delay(500);
-
-//   si5351.fxtal = si5351_now.fxtalHz;
-//   si5351.powerDown();
-
-//   const int32_t programmedHz = programSi5351Rx(si5351, si5351_now);
-//   if (si5351.i2cError() != 0) {
-//     Serial.printf("SI5351 I2C error during programming: %u. Synth disabled.\n", si5351.i2cError());
-//     synthInitialized = false;
-//     return;
-//   }else {
-//     Serial.printf("SI5351 programmed successfully.\n");
-//     synthInitialized = true;
+// #else
 //   }
-//   lastSynth = si5351_now;
-
-//   Serial.printf("Initialize demodulator (Hilbert transform).\r\n");
-//   demod_init();
-
-//   delay(500);
-//   Serial.printf("Initialize IQ ADC (pins + attenuation).\r\n");
-//   iq_adc_setup();
-//   iq_adc_set_att_level((uint8_t)ui_get_att());
-
-//   //set the resolution to 12 bits (0-4096)
-//   analogReadResolution(12);
-
-//   Serial.printf("Initialize I2S audio output (MAX98357).\r\n");
-//   if (audio_i2s_setup()) {
-//     Serial.printf("I2S audio initialized successfully.\r\n");
-//     delay(500);
-//   } else {
-//     Serial.printf("Failed to initialize I2S audio!\r\n");
-//   }
-
-//   // Initialize RX attenuation PWM control
-//   rxAttPwmInit();
-//   setRxAttFromUi(30); // Set initial attenuation to minumum (3V out)
-//   // Initialize TX bias PWM control
-//   txBiasPwmInit();
-//   setTxBiasFromUi(0); // Set initial TX bias to minimum (0V out)
-  
-//   iq_adc_set_att_level(0); // ADC attenuation always 0 dB
-
-//   audioVolume = ui_get_volume(); // Initialize audio volume from UI setting
-
-//   delay(5000); // Wait for everything to stabilize before starting WiFi (especially important if PSRAM is present)
-//   // Start WiFi config (STA if credentials are valid, AP fallback if not)
-//   wifi_config_setup();
-
-//   ft8tx.begin(7075000); // Set FT8 TX base frequency to 7075 kHz
-  
+// #endif
 // }
+
+
 
 void setup_minimal() {
 
@@ -1164,29 +1064,52 @@ void setup() {
   //   Serial.printf("Failed to initialize I2S audio!\r\n");
   // }
   
+  Serial.printf("Initialize antenna filters control (MCP23017).\r\n");
   antFilters = new AntennaFilters( ANT_FILTERS_ADDR); // the actual I2C address of your MCP23017
   antFilters->begin();
   antFilters->bypassAll(); // Start with all filters bypassed
 
   // Initialize RX attenuation PWM control
-  rxAttPwmInit();
-  setRxAttFromUi(30); // Set initial attenuation to minumum (3V out)
+  //rxAttPwmInit();
+  //setRxAttFromUi(30); // Set initial attenuation to minumum (3V out)
   // Initialize TX bias PWM control
-  txBiasPwmInit();
-  setTxBiasFromUi(0); // Set initial TX bias to minimum (0V out)
+  // txBiasPwmInit();
+  // setTxBiasFromUi(0); // Set initial TX bias to minimum (0V out)
   
   //iq_adc_set_att_level(0); // ADC attenuation always 0 dB
 
   audioVolume = ui_get_volume(); // Initialize audio volume from UI setting
 
+  Serial.printf("Initialize Power/SWR meter.\r\n");
   pwrswrmeter = new PowerSWRMeter(GPIO_NUM_4, GPIO_NUM_5);
   pwrswrmeter->begin();
   
+  Serial.printf("Initialize QSO stats.\r\n");
+  qsoStats.begin();
+  qsoStats.loadCTYFromFile("/cty_extended.dat");
+
   setup_done = true;
 
 }
 
+time_t makeTimestamp(int year,
+                     int month,
+                     int day,
+                     int hour,
+                     int minute,
+                     int second)
+{
+    struct tm t = {};
 
+    t.tm_year = year - 1900; // years since 1900
+    t.tm_mon  = month - 1;   // 0-11
+    t.tm_mday = day;
+    t.tm_hour = hour;
+    t.tm_min  = minute;
+    t.tm_sec  = second;
+
+    return mktime(&t);
+}
 
 void loop() {
 
@@ -1285,10 +1208,12 @@ void loop() {
   }
 
   static uint32_t lastStatusMs = 0;
-  if (millis() - lastStatusMs > 15000) {
+  if (millis() - lastStatusMs > 60000) {
     lastStatusMs = millis();
     uint16_t bestFreq =
         ft8FreqOptimizer.best_freq(ui_get_vfo_freq(), false, false);
-    Serial.printf("[FT8 Freq Optimizer] Best frequency: %u Hz    it took %lu ms\n", bestFreq, millis() - lastStatusMs );      
+    // Serial.printf("[FT8 Freq Optimizer] Best frequency: %u Hz    it took %lu ms\n", bestFreq, millis() - lastStatusMs );      
+  
   }
+  qsoStats.periodicSave(millis());
 }
