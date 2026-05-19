@@ -23,7 +23,8 @@
 #include "pwrswrmeter.h"
 #include "qsostats.h"
 #include "adif.h"
-#include "ft8_decoder.h"
+// #include "ft8_decoder.h"
+#include "ft8_consumer_module.h"
   
 static SI5351 si5351;
 FT8_TX ft8tx(si5351);
@@ -54,17 +55,17 @@ static DemodMode ui_mode_to_demod_mode(UiMode mode) {
 // ===============================
 // FT8 Decoder Buffer
 // ===============================
-#define FT8_DECODER_BUFFER_SIZE 256
-static int16_t ft8_sample_buffer[FT8_DECODER_BUFFER_SIZE];
-static uint16_t ft8_sample_idx = 0;
+// #define FT8_DECODER_BUFFER_SIZE 256
+// static int16_t ft8_sample_buffer[FT8_DECODER_BUFFER_SIZE];
+// static uint16_t ft8_sample_idx = 0;
 
-static void ft8_decoder_add_sample(int16_t sample) {
-    ft8_sample_buffer[ft8_sample_idx++] = sample;
-    if (ft8_sample_idx >= FT8_DECODER_BUFFER_SIZE) {
-        ft8_decoder_add_samples(ft8_sample_buffer, FT8_DECODER_BUFFER_SIZE);
-        ft8_sample_idx = 0;
-    }
-}
+// static void ft8_decoder_add_sample(int16_t sample) {
+//     ft8_sample_buffer[ft8_sample_idx++] = sample;
+//     if (ft8_sample_idx >= FT8_DECODER_BUFFER_SIZE) {
+//         ft8_decoder_add_samples(ft8_sample_buffer, FT8_DECODER_BUFFER_SIZE);
+//         ft8_sample_idx = 0;
+//     }
+// }
 
 // ===============================
 // SDR Voice AGC
@@ -197,6 +198,10 @@ static void processAudioPCM1808() {
       if (webAbs > peakWebAudio) peakWebAudio = webAbs;
 
       wifi_config_audio_push(lastSynth.vfoHz, webAudio);
+
+      // Never block the audio loop; drop FT8 sample if decoder queue is full.
+      (void)ft8_consumer_module_enqueue_i16(&audioSample, 1, 0);
+
 
       // =========== AGC (if enabled) ===========
       // apply AGC if enabled in UI (AGC should be applied before volume control and peak measurement)
@@ -397,7 +402,8 @@ static void processAudioPCM1808_simulatedIQ() {
             int16_t audioSample = demod_process(iDecimated, qDecimated, demodMode);
 
             // Feed audio to FT8 decoder
-            ft8_decoder_add_sample(audioSample);
+            // ft8_decoder_add_sample(audioSample);
+                   
 
             wifi_config_audio_push(lastSynth.vfoHz, 16 * audioSample);
 
@@ -1107,11 +1113,36 @@ void setup() {
   qsoStats.begin();
   qsoStats.loadCTYFromFile("/cty_extended.dat");
 
+  
   Serial.printf("Initialize FT8 decoder.\r\n");
-  ft8_decoder_init();
+
+  // Configure and initialize the FT8 consumer module
+  ft8_consumer_module_config_t consumer_cfg = {
+      .sample_rate = 8000,
+      .base_freq_mhz = 14.074f,
+      .sample_queue_depth = 2048, // kSampleQueueDepth,
+      .finalize_queue_depth = 4,
+      .append_batch_size = 256,
+      .consumer_task_stack = 8192, // 12288,
+      .finalize_task_stack = 8192, // 24576,
+      .consumer_task_priority = 2,
+      .finalize_task_priority = 0, // lower than loopTask to avoid blocking loop() on Core1
+      .consumer_task_core = 0, // APP_CPU_NUM,
+        .finalize_task_core = 0,
+  };
+
+  if (!ft8_consumer_module_init(&consumer_cfg)) {
+      Serial.println("[ft8] Failed to initialize consumer module");
+      return;
+  }
+
+  if (!ft8_consumer_module_start()) {
+      Serial.println("[ft8] Failed to start consumer module");
+      return;
+  }
+
 
   setup_done = true;
-
 }
 
 time_t makeTimestamp(int year,
@@ -1186,14 +1217,14 @@ void loop() {
   static uint32_t lastDecoderCheck = 0;
   uint32_t now = millis();
   if (now - lastDecoderCheck >= 100) {  // Check every 100ms
-    if (ft8_decoder_process()) {
-      // Decoder found messages in this slot
-      const ft8_decoded_msg_t* msg = ft8_decoder_get_last_message();
-      if (msg && msg->valid) {
-        Serial.printf("[FT8] SNR:%.1f dB  Freq:%.1f Hz  Message: %s\n", 
-                      msg->snr, msg->freq, msg->message);
-      }
-    }
+    // if (ft8_decoder_process()) {
+    //   // Decoder found messages in this slot
+    //   const ft8_decoded_msg_t* msg = ft8_decoder_get_last_message();
+    //   if (msg && msg->valid) {
+    //     Serial.printf("[FT8] SNR:%.1f dB  Freq:%.1f Hz  Message: %s\n", 
+    //                   msg->snr, msg->freq, msg->message);
+    //   }
+    // }
     lastDecoderCheck = now;
   }
 
