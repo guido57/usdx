@@ -3,7 +3,8 @@
 #include <Arduino.h>
 #include <ETH.h>
 #include <WebServer.h>
-#include <WebSocketsClient.h>
+#include <WebSocketsServer.h>
+#include <ESPmDNS.h>
 #include <Preferences.h>
 #include <LittleFS.h>
 #include "esp_heap_caps.h"
@@ -26,7 +27,7 @@ extern FT8FreqOptimizer ft8FreqOptimizer; // declared in main.cpp
 extern QSOStats qsoStats; // declared in main.cpp 
 
 static WebServer server(80);
-static WebSocketsClient ws;
+static WebSocketsServer wsServer(8765);  // Default port; will be updated from UI settings
 
 fs::LittleFSFS LogsFS; // Separate LittleFS instance for logs to avoid wear on the main filesystem
 
@@ -64,13 +65,10 @@ QueueHandle_t adifQueue;       // ADIF upload items
 #define ETH_SPI_MISO  7  // 12
 #define ETH_SPI_MOSI  2  // 13
 
-
-const char*    ws_server_host = "192.168.1.184";   // Python PC IP
-const uint16_t ws_server_port = 8765;
-
 static bool timeConfigured = false;
 static bool timeSynced = false;
 static bool serverStarted = false;
+static bool wsServerStarted = false;
 static uint32_t lastReconnectMs = 0;
 static bool staConnecting = false;
 static uint32_t staStartMs = 0;
@@ -91,6 +89,8 @@ bool    g_wifiWarning     = false;
 bool     g_ft8ServerConnected = false;
 bool     g_ft8ServerActive    = false;
 uint32_t g_ft8LastRxMs        = 0;
+
+static const uint8_t  FT8_MSGS_PER_LOOP_MAX = 6;
 
 QSOManager qsoManager;
 
@@ -132,44 +132,47 @@ static void setup_time_once() {
            timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
 }
 
-// ===== WebSocket Event Handler=====
+// ===== WebSocket Server Event Handler=====
 #define MAX_FT8_MSG 512  // maximum length of an FT8 string
 
-void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
   char msg[MAX_FT8_MSG];
-  size_t len ;
-  switch(type) { 
-    
-    case WStype_TEXT: 
+  size_t len;
+  
+  switch(type) {
+    case WStype_DISCONNECTED:
+        Serial.printf("[WS] Client %u disconnected\n", num);
+        break;
+        
+    case WStype_CONNECTED:
+        Serial.printf("[WS] Client %u connected, IP: %s\n", num, wsServer.remoteIP(num).toString().c_str());
+        g_ft8ServerConnected = true;
+        break;
+        
+    case WStype_TEXT:
       len = min(length, (size_t)MAX_FT8_MSG-1);
       memcpy(msg, payload, len);
       msg[len] = 0;
-      //Serial.printf("[FT8] Received and sent to ft8Queue: %s\n", msg);
+      //Serial.printf("[FT8] Received from client %u: %s\n", num, msg);
       xQueueSend(ft8Queue, msg, 0);   // copy data
       break;
- 
-    case WStype_CONNECTED:
-        Serial.println("✅ Connected to FT8 server");
-         g_ft8ServerConnected = true;
-        break;
-
-    case WStype_DISCONNECTED:
-        Serial.println("❌ Disconnected — will auto reconnect");
-        g_ft8ServerConnected = false;
-        g_ft8ServerActive    = false;
-        break;
-
+      
+    case WStype_BIN:
+      // Binary data from client (audio, etc.)
+      Serial.printf("[WS] Binary data from client %u, %u bytes\n", num, length);
+      break;
+      
     case WStype_ERROR:
-        Serial.println("⚠ WebSocket error");
+        Serial.printf("[WS] Error on client %u\n", num);
         break;
-
+        
     case WStype_PONG:
-        // keepalive
+        // Pong response
         break;
-
+        
     default:
         break;
-  }  
+  }
 }
 
 // ===== HTTP Handlers =====
@@ -196,7 +199,9 @@ static void handleApiUi() {
     doc["ft8_offset"] = s.ft8_offset;
     doc["ft8_offset_enabled"] = s.ft8_offset_enabled;
     doc["ft8_testmsg"] = s.ft8_testmsg;
-    doc["qrz_key"] = s.qrz_key;
+    doc["ws_server_host"] = s.ws_server_host;
+    doc["ws_server_port"] = s.ws_server_port;
+    doc["ws_server_enabled"] = s.ws_server_enabled;
     doc["mycall"] = s.mycall;
     doc["mygrid"] = s.mygrid;
     doc["mode"] = s.mode; doc["bandval"] = s.bandval; doc["stepsize"] = s.stepsize;
@@ -237,7 +242,9 @@ static void handleApiUiSave() {
 
     JSET(vfoA); JSET(vfoB); JSET(vfoSel); 
     JSET(ft8_offset); JSET(ft8_offset_enabled); JSET_STRING(ft8_testmsg); 
-    JSET_STRING(qrz_key);
+    JSET_STRING(ws_server_host);
+    JSET(ws_server_port); 
+    JSET(ws_server_enabled);
     JSET_STRING(mycall); JSET_STRING(mygrid); 
     JSET(mode); JSET(bandval);
     JSET(stepsize); JSET(rit); JSET(ritActive); JSET(volume);
@@ -536,6 +543,22 @@ static void startServer() {
     Serial.println("[WebServer] HTTP server started");
 }
 
+// ===== WebSocket Server Setup =====
+
+static void startWebSocketServer() {
+    if (wsServerStarted) return;
+    
+    uint16_t wsPort = ui_get_ws_server_port();
+    Serial.printf("[WS] Starting WebSocket server on port %u\n", wsPort);
+    
+    wsServer = WebSocketsServer(wsPort);
+    wsServer.onEvent(webSocketEvent);
+    wsServer.begin();
+    wsServerStarted = true;
+    
+    Serial.printf("[WS] WebSocket server started on port %u\n", wsPort);
+}
+
 
 static void addFt8SpotFromJson(const char* json)
 {
@@ -615,7 +638,6 @@ void NetworkTask(void* pvParameters) {
 
     Serial.println("[ETH] Network task started on Core 0");
 
-    static unsigned long lastReconnectAttempt = 0;
     static bool ethConnected = false;
 
     // Wait for UI startup
@@ -661,6 +683,15 @@ void NetworkTask(void* pvParameters) {
     setup_time_once();
     startServer();
 
+    // Start mDNS responder
+    if (!MDNS.begin("ft8-esp32")) {
+        Serial.println("Error starting mDNS");
+    }else
+    Serial.println("mDNS started: ft8-esp32.local");
+
+    // Start WebSocket server
+    startWebSocketServer();
+
     // ---- Main loop ----
     for(;;) {
 
@@ -668,21 +699,8 @@ void NetworkTask(void* pvParameters) {
         if (serverStarted)
             server.handleClient();
 
-        // ---- WebSocket ----
-        ws.loop();
-
-        // ---- WebSocket reconnect ----
-        if (!ws.isConnected() &&
-            ETH.linkUp() &&
-            millis() - lastReconnectAttempt > 5000) {
-
-            lastReconnectAttempt = millis();
-
-            Serial.println("[WS] Reconnecting...");
-
-            ws.begin(ws_server_host, ws_server_port, "/");
-            ws.onEvent(webSocketEvent);
-        }
+        // ---- WebSocket server ----
+        wsServer.loop();
 
         // ---- Ethernet reconnect handling ----
         bool link = ETH.linkUp();
@@ -696,6 +714,8 @@ void NetworkTask(void* pvParameters) {
             g_wifiConnected = false;
             g_wifiBars = 0;
             g_wifiRssi = 0;
+            g_ft8ServerConnected = (wsServer.connectedClients() > 0);
+            g_ft8ServerActive = false;
         }
 
         if (link && !ethConnected) {
@@ -715,17 +735,20 @@ void NetworkTask(void* pvParameters) {
             if (!serverStarted)
                 startServer();
 
+            if (!wsServerStarted)
+                startWebSocketServer();
+
             ethConnected = true;
         }
 
-        vTaskDelay(10);
+        vTaskDelay(pdMS_TO_TICKS(2));
 
         // ---- Send audio to websocket ----
         AudioFrame* framePtr;
 
         if (xQueueReceive(audioQueue, &framePtr, 0) == pdTRUE) {
 
-            if (ws.isConnected()) {
+            if (wsServer.connectedClients() > 0) {
 
                 uint8_t packet[16 + WS_AUDIO_BUF_SAMPLES * 2];
 
@@ -752,7 +775,7 @@ void NetworkTask(void* pvParameters) {
                        framePtr->samples,
                        samplesToCopy * 2);
 
-                ws.sendBIN(packet,
+                wsServer.broadcastBIN(packet,
                            16 + samplesToCopy * 2);
             }
 
@@ -760,7 +783,7 @@ void NetworkTask(void* pvParameters) {
         }
 
         // ---- Send ADIF ----
-        if (ws.isConnected()) {
+        if (wsServer.connectedClients() > 0) {
 
             AdifUploadItem adifItem;
 
@@ -772,20 +795,23 @@ void NetworkTask(void* pvParameters) {
                     strnlen(adifItem.adif,
                             sizeof(adifItem.adif));
 
-                ws.sendTXT(adifItem.adif, len);
+                wsServer.broadcastTXT(adifItem.adif, len);
             }
         }
 
         // ---- FT8 messages ----
         char ft8Msg[MAX_FT8_MSG];
 
-        while (xQueueReceive(ft8Queue,
-                             ft8Msg,
-                             0) == pdTRUE) {
+        uint8_t processedFt8Msgs = 0;
+        while (processedFt8Msgs < FT8_MSGS_PER_LOOP_MAX &&
+               xQueueReceive(ft8Queue, ft8Msg, 0) == pdTRUE) {
 
-            addFt8SpotFromJson(ft8Msg);
-
+            if(ui_get_ws_server_enabled()) {
+                addFt8SpotFromJson(ft8Msg);
+            }
+            
             g_ft8LastRxMs = millis();
+            processedFt8Msgs++;
         }
 
         // ---- Global network status ----
@@ -796,12 +822,17 @@ void NetworkTask(void* pvParameters) {
         g_wifiBars = ETH.linkUp() ? 5 : 0;
 
         // ---- FT8 activity timeout ----
+        g_ft8ServerConnected = (wsServer.connectedClients() > 0);
         if (g_ft8ServerConnected) {
             g_ft8ServerActive =
                 (millis() - g_ft8LastRxMs) < 15000;
         } else {
             g_ft8ServerActive = false;
         }
+
+        // Keep UI/API snappy even while websocket is offline.
+        if (serverStarted)
+            server.handleClient();
     }
 }
 
@@ -837,17 +868,8 @@ void WiFiNetworkTask(void* pvParameters) {
         // ---- HTTP server ----
         if (serverStarted) server.handleClient();
 
-        // ---- WebSocket loop ----
-        ws.loop();
-
-        // ---- WebSocket reconnect ----
-        if (!ws.isConnected() && WiFi.status() == WL_CONNECTED &&
-            millis() - lastReconnectAttempt > 5000) {
-            lastReconnectAttempt = millis();
-            ets_printf("[WS] Reconnecting...\r\n");
-            ws.begin(ws_server_host, ws_server_port, "/");
-            ws.onEvent(webSocketEvent);
-        }
+        // ---- WebSocket server loop ----
+        wsServer.loop();
 
         // ---- WiFi reconnecting ----
         if (WiFi.status() != WL_CONNECTED &&
@@ -875,6 +897,8 @@ void WiFiNetworkTask(void* pvParameters) {
             setup_time_once();
             // Start HTTP server
             startServer();
+            // Start WebSocket server
+            startWebSocketServer();
             staConnecting = false;
         }
 
@@ -884,7 +908,7 @@ void WiFiNetworkTask(void* pvParameters) {
         AudioFrame* framePtr;
         if (xQueueReceive(audioQueue, &framePtr, 0) == pdTRUE) {
           
-          if (ws.isConnected()) {
+          if (wsServer.connectedClients() > 0) {
 
               uint8_t packet[16 + WS_AUDIO_BUF_SAMPLES * 2];
 
@@ -903,20 +927,20 @@ void WiFiNetworkTask(void* pvParameters) {
               size_t samplesToCopy = min((uint16_t)framePtr->n_samples, (uint16_t)WS_AUDIO_BUF_SAMPLES);
               memcpy(packet+16, framePtr->samples, samplesToCopy * 2);
               // Serial.printf("[Audio] Sending frame with %d samples at %d Hz\n", framePtr->n_samples, framePtr->freq_hz);      
-              ws.sendBIN(packet, 16 + samplesToCopy * 2);
+              wsServer.broadcastBIN(packet, 16 + samplesToCopy * 2);
           }
           // Return frame to free pool
           xQueueSend(freeFrameQueue, &framePtr, 0);
         }
 
         // ---- Send ADIF to websocket if available ----
-        if (ws.isConnected()) {
+        if (wsServer.connectedClients() > 0) {
             AdifUploadItem adifItem;
             if (xQueueReceive(adifQueue, &adifItem, 0) == pdTRUE) {
                 size_t len = strnlen(adifItem.adif, sizeof(adifItem.adif));
 
                 Serial.printf("Sending ADIF len=%u: '%s'\n", len, adifItem.adif);
-                ws.sendTXT(adifItem.adif, len); 
+                wsServer.broadcastTXT(adifItem.adif, len); 
             }
         }
 
@@ -924,8 +948,10 @@ void WiFiNetworkTask(void* pvParameters) {
         char ft8Msg[MAX_FT8_MSG];
         while (xQueueReceive(ft8Queue, ft8Msg, 0) == pdTRUE) {
             //Serial.printf("[FT8 RX] %s\n", ft8Msg);
-            addFt8SpotFromJson(ft8Msg);
-
+            if(ui_get_ws_server_enabled()) {
+                addFt8SpotFromJson(ft8Msg);
+            }
+            
             g_ft8LastRxMs = millis();   // mark traffic
         }
 
@@ -943,7 +969,7 @@ void WiFiNetworkTask(void* pvParameters) {
 
                 // Detect sudden drop (>10 dB)
                 if (rssi < lastRssi - 10) {
-                    g_wifiWarning = true;
+                    Serial.printf("[WiFi] RSSI drop detected: %d -> %d dB\n", lastRssi, rssi);
                 }
                 lastRssi = rssi;
 
@@ -957,8 +983,8 @@ void WiFiNetworkTask(void* pvParameters) {
         }
 
         // FT8 activity timeout (no spots for 15s → idle)
+        g_ft8ServerConnected = (wsServer.connectedClients() > 0);
         if (g_ft8ServerConnected) {
-            
             g_ft8ServerActive = (millis() - g_ft8LastRxMs) < 15000;
         } else {
             g_ft8ServerActive = false;
