@@ -3,6 +3,7 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+docs/usdx_kicad/.history/
 
 # Ignore local secrets
 **/secrets.h
