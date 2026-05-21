@@ -617,34 +617,101 @@ function computeGeo(call, grid) {
 // Audio streaming
 // ------------------------------------------   
 let ws=null,audioCtx=null,node=null,queue=[],cur=null,curIdx=0;
+let queuedSamples=0;
+let audioPrimed=false;
+let concealSamples=0;
+let lastSample=0;
+const AUDIO_PRIME_SAMPLES=8192;
+const AUDIO_MAX_CONCEAL_SAMPLES=8000;
 const statusEl=document.getElementById('audioStatus');
 
-function setStatus(t){if(statusEl) statusEl.textContent=t;}
+function setStatus(t){
+  if(statusEl && statusEl.textContent!==t) statusEl.textContent=t;
+}
 
 function onAudio(e){
   const out=e.outputBuffer.getChannelData(0);
+
+  // Keep a small jitter buffer to avoid underruns and audible glitches.
+  if(!audioPrimed){
+    if(queuedSamples < AUDIO_PRIME_SAMPLES){
+      out.fill(0);
+      return;
+    }
+    audioPrimed=true;
+    setStatus('Streaming');
+  }
+
   for(let i=0;i<out.length;i++){
-    if(!cur || curIdx>=cur.length){cur=queue.shift(); curIdx=0;if(!cur){out[i]=0;continue;}}
+    if(!cur || curIdx>=cur.length){
+      cur=queue.shift();
+      curIdx=0;
+      if(!cur){
+        // Conceal short network stalls instead of hard muting.
+        if(concealSamples < AUDIO_MAX_CONCEAL_SAMPLES){
+          lastSample *= 0.998;
+          out[i]=lastSample;
+          concealSamples++;
+          continue;
+        }
+        audioPrimed=false;
+        concealSamples=0;
+        out[i]=0;
+        continue;
+      }
+    }
     out[i]=cur[curIdx++];
+    lastSample=out[i];
+    concealSamples=0;
+    queuedSamples--;
   }
 }
 
 function startAudio(){
   if(ws) return;
+  queue=[];
+  cur=null;
+  curIdx=0;
+  queuedSamples=0;
+  audioPrimed=false;
+  concealSamples=0;
+  lastSample=0;
   audioCtx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:8000});
-  node=audioCtx.createScriptProcessor(1024,0,1);
+  audioCtx.resume();
+  node=audioCtx.createScriptProcessor(2048,0,1);
   node.onaudioprocess=onAudio;
   node.connect(audioCtx.destination);
-  ws=new WebSocket('ws://'+location.hostname+':81');
+  ws=new WebSocket('ws://ft8-esp32.local:8765');
   ws.binaryType='arraybuffer';
-  ws.onopen=()=>setStatus('Streaming');
+  ws.onopen=()=>setStatus('Streaming (buffering)');
   ws.onclose=()=>{setStatus('Stopped'); ws=null;};
   ws.onerror=()=>setStatus('Error');
   ws.onmessage=(evt)=>{
-    const i16=new Int16Array(evt.data);
-    const f32=new Float32Array(i16.length);
-    for(let i=0;i<i16.length;i++){f32[i]=i16[i]/32768;}
+    if(!(evt.data instanceof ArrayBuffer)) return;
+    const dv = new DataView(evt.data);
+    if(dv.byteLength < 16) return;
+
+    const announcedSamples = dv.getUint32(8, false); // big-endian header field
+    const maxSamples = Math.floor((dv.byteLength - 16) / 2);
+    const samples = Math.min(announcedSamples, maxSamples);
+    if(samples <= 0) return;
+
+    const f32=new Float32Array(samples);
+    for(let i=0;i<samples;i++){
+      // ESP32 sends int16 PCM in native little-endian.
+      f32[i]=dv.getInt16(16 + i*2, true)/32768;
+    }
+
     queue.push(f32);
+    queuedSamples += samples;
+
+    // Limit backlog growth if browser tab stalls.
+    while(queue.length > 96){
+      const dropped = queue.shift();
+      if(dropped){
+        queuedSamples -= dropped.length;
+      }
+    }
   };
 }
 
@@ -652,7 +719,14 @@ function stopAudio(){
   if(ws){ws.close(); ws=null;}
   if(node){node.disconnect(); node=null;}
   if(audioCtx){audioCtx.close(); audioCtx=null;}
-  queue=[]; cur=null; curIdx=0; setStatus('Stopped');
+  queue=[];
+  cur=null;
+  curIdx=0;
+  queuedSamples=0;
+  audioPrimed=false;
+  concealSamples=0;
+  lastSample=0;
+  setStatus('Stopped');
 }
 
 // Tabs
@@ -748,10 +822,11 @@ function isSettingsTabActive() {
 }
 
 setInterval(async () => {
-    if (!isSettingsTabActive()) {
-        await fetchUi();   // refresh backend values
-        syncFt8FromUi();   // update FT8 controls
-    }
+  // Always poll UI, even during audio streaming.
+  if (!isSettingsTabActive()) {
+    await fetchUi();   // refresh backend values
+    syncFt8FromUi();   // update FT8 controls
+  }
 }, 5000);
 
 
@@ -1264,6 +1339,10 @@ document.querySelectorAll('#ft8-qsos th').forEach(th => {
 
 // Poll server for QSOs every 3 seconds
 async function fetchFt8QSOs(){
+  // While audio websocket is active, avoid expensive QSO polling/rendering
+  // that can starve streaming on both browser and ESP32.
+  //if (ws) return;
+
     try{
         const resp = await fetch('/api/ft8/qsos');
         const data = await resp.json();
@@ -1302,7 +1381,9 @@ async function fetchFt8QSOs(){
 
     }catch(e){console.error(e);}
 }
-setInterval(fetchFt8QSOs,3000);
+setInterval(() => {
+  fetchFt8QSOs();
+}, 3000);
 
 // WiFi Form
 document.getElementById('wifiForm')?.addEventListener('submit', async e=>{

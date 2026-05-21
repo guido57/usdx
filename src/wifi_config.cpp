@@ -34,7 +34,7 @@ fs::LittleFSFS LogsFS; // Separate LittleFS instance for logs to avoid wear on t
 #define CHUNK_SAMPLES 160
 #define FRAME_SIZE (16 + CHUNK_SAMPLES*2) // header 16B + audio
 
-#define WS_AUDIO_BUF_SAMPLES 256   // example
+#define WS_AUDIO_BUF_SAMPLES 512   // larger frame buffer for smoother websocket streaming
 
 typedef struct {
     uint64_t ts_ms;
@@ -67,7 +67,7 @@ QueueHandle_t adifQueue;       // ADIF upload items
 
 static bool timeConfigured = false;
 static bool timeSynced = false;
-static bool serverStarted = false;
+static bool webServerStarted = false;
 static bool wsServerStarted = false;
 static uint32_t lastReconnectMs = 0;
 static bool staConnecting = false;
@@ -91,6 +91,8 @@ bool     g_ft8ServerActive    = false;
 uint32_t g_ft8LastRxMs        = 0;
 
 static const uint8_t  FT8_MSGS_PER_LOOP_MAX = 6;
+static const uint8_t  FT8_MSGS_WHEN_AUDIO_PENDING = 1;
+static const uint8_t  AUDIO_FRAMES_PER_LOOP_MAX = 3;
 
 QSOManager qsoManager;
 
@@ -477,8 +479,8 @@ static void handleMemoryStats() {
 
 // ===== Web Server Setup =====
 
-static void startServer() {
-    if (serverStarted) return;
+static void startWebServer() {
+    if (webServerStarted) return;
 
     server.on("/", HTTP_GET, [](){
         File f = LittleFS.open("/index.html", "r");
@@ -539,7 +541,7 @@ static void startServer() {
     server.on("/api/memstats", HTTP_GET, handleMemoryStats);
 
     server.begin(); 
-    serverStarted = true;     
+    webServerStarted = true;     
     Serial.println("[WebServer] HTTP server started");
 }
 
@@ -548,15 +550,18 @@ static void startServer() {
 static void startWebSocketServer() {
     if (wsServerStarted) return;
     
-    uint16_t wsPort = ui_get_ws_server_port();
+    uint16_t requestedPort = ui_get_ws_server_port();
+    const uint16_t wsPort = 8765;
+    if (requestedPort != wsPort) {
+        Serial.printf("[WS] Requested port %u, using fixed port %u\n", requestedPort, wsPort);
+    }
     Serial.printf("[WS] Starting WebSocket server on port %u\n", wsPort);
-    
-    wsServer = WebSocketsServer(wsPort);
+
     wsServer.onEvent(webSocketEvent);
     wsServer.begin();
     wsServerStarted = true;
     
-    Serial.printf("[WS] WebSocket server started on port %u\n", wsPort);
+    Serial.printf("[WS] WebSocket server started on port 8765\n");
 }
 
 
@@ -637,22 +642,20 @@ uint8_t wifiBarsFromRSSI(int rssi)
 void NetworkTask(void* pvParameters) {
 
     Serial.println("[ETH] Network task started on Core 0");
-
     static bool ethConnected = false;
-
     // Wait for UI startup
     vTaskDelay(2000 / portTICK_PERIOD_MS);
 
+    if(!heap_caps_check_integrity_all(true)) ets_printf("!!! Corrupted heap before WiFi.begin !!!\n");
+    
     // ---- Start Ethernet ----
     Serial.println("[ETH] Starting Ethernet...");
     Serial.println("Initializing SPI...");
     SPI.begin(ETH_SPI_SCK, ETH_SPI_MISO, ETH_SPI_MOSI);
-
+    // Reset the Ethernet PHY
     pinMode(ETH_PHY_RST, OUTPUT);
-
     digitalWrite(ETH_PHY_RST, LOW);
     delay(100);
-
     digitalWrite(ETH_PHY_RST, HIGH);
     delay(200);
 
@@ -680,14 +683,16 @@ void NetworkTask(void* pvParameters) {
 
     ethConnected = true;
 
+
+    // ---- Setup time, mDNS, WebSocket server ----
     setup_time_once();
-    startServer();
+    startWebServer();
 
     // Start mDNS responder
-    if (!MDNS.begin("ft8-esp32")) {
+    if (!MDNS.begin(ui_get_ws_server_host())) {
         Serial.println("Error starting mDNS");
     }else
-    Serial.println("mDNS started: ft8-esp32.local");
+        Serial.printf("mDNS started: %s.local\n", ui_get_ws_server_host());
 
     // Start WebSocket server
     startWebSocketServer();
@@ -696,7 +701,7 @@ void NetworkTask(void* pvParameters) {
     for(;;) {
 
         // ---- HTTP server ----
-        if (serverStarted)
+        if (webServerStarted)
             server.handleClient();
 
         // ---- WebSocket server ----
@@ -708,9 +713,7 @@ void NetworkTask(void* pvParameters) {
         if (!link && ethConnected) {
 
             Serial.println("[ETH] Link lost");
-
             ethConnected = false;
-
             g_wifiConnected = false;
             g_wifiBars = 0;
             g_wifiRssi = 0;
@@ -732,8 +735,8 @@ void NetworkTask(void* pvParameters) {
 
             setup_time_once();
 
-            if (!serverStarted)
-                startServer();
+            if (!webServerStarted)
+                startWebServer();
 
             if (!wsServerStarted)
                 startWebSocketServer();
@@ -745,8 +748,9 @@ void NetworkTask(void* pvParameters) {
 
         // ---- Send audio to websocket ----
         AudioFrame* framePtr;
-
-        if (xQueueReceive(audioQueue, &framePtr, 0) == pdTRUE) {
+        uint8_t sentAudioFrames = 0;
+        while (sentAudioFrames < AUDIO_FRAMES_PER_LOOP_MAX &&
+               xQueueReceive(audioQueue, &framePtr, 0) == pdTRUE) {
 
             if (wsServer.connectedClients() > 0) {
 
@@ -780,9 +784,10 @@ void NetworkTask(void* pvParameters) {
             }
 
             xQueueSend(freeFrameQueue, &framePtr, 0);
+            sentAudioFrames++;
         }
 
-        // ---- Send ADIF ----
+        // ---- Send ADIF to WebSocket clients ----
         if (wsServer.connectedClients() > 0) {
 
             AdifUploadItem adifItem;
@@ -799,11 +804,13 @@ void NetworkTask(void* pvParameters) {
             }
         }
 
-        // ---- FT8 messages ----
+        // ---- get FT8 messages from the external ft8 decoder via websocket ----
         char ft8Msg[MAX_FT8_MSG];
-
+        const uint8_t ft8Budget = (uxQueueMessagesWaiting(audioQueue) > 0)
+                        ? FT8_MSGS_WHEN_AUDIO_PENDING
+                        : FT8_MSGS_PER_LOOP_MAX;
         uint8_t processedFt8Msgs = 0;
-        while (processedFt8Msgs < FT8_MSGS_PER_LOOP_MAX &&
+        while (processedFt8Msgs < ft8Budget &&
                xQueueReceive(ft8Queue, ft8Msg, 0) == pdTRUE) {
 
             if(ui_get_ws_server_enabled()) {
@@ -829,10 +836,6 @@ void NetworkTask(void* pvParameters) {
         } else {
             g_ft8ServerActive = false;
         }
-
-        // Keep UI/API snappy even while websocket is offline.
-        if (serverStarted)
-            server.handleClient();
     }
 }
 
@@ -862,11 +865,25 @@ void WiFiNetworkTask(void* pvParameters) {
     Serial.printf("[WiFi] Connected, IP=%s\n", WiFi.localIP().toString().c_str());
     setup_time_once();
 
+    // ---- Setup time, mDNS, WebSocket server ----
+    setup_time_once();
+    startWebServer();
+
+    // Start mDNS responder
+    if (!MDNS.begin(ui_get_ws_server_host())) {
+        Serial.println("Error starting mDNS");
+    }else
+        Serial.printf("mDNS started: %s.local\n", ui_get_ws_server_host());
+
+    // Start WebSocket server
+    startWebSocketServer();
+
     // Main network loop
     for(;;) {
 
         // ---- HTTP server ----
-        if (serverStarted) server.handleClient();
+        if (webServerStarted) 
+            server.handleClient();
 
         // ---- WebSocket server loop ----
         wsServer.loop();
@@ -896,18 +913,20 @@ void WiFiNetworkTask(void* pvParameters) {
             ets_printf("[WiFi] Connected, IP=%s\n", WiFi.localIP().toString().c_str());
             setup_time_once();
             // Start HTTP server
-            startServer();
+            startWebServer();
             // Start WebSocket server
             startWebSocketServer();
             staConnecting = false;
         }
 
-        vTaskDelay(10); // give CPU time to other tasks (WiFi core, DSP)
+        vTaskDelay(2); // give CPU time to other tasks (WiFi core, DSP)
     
         // ---- Send audio to websocket if available ----
         AudioFrame* framePtr;
-        if (xQueueReceive(audioQueue, &framePtr, 0) == pdTRUE) {
-          
+        uint8_t sentAudioFrames = 0;
+        while (sentAudioFrames < AUDIO_FRAMES_PER_LOOP_MAX &&
+               xQueueReceive(audioQueue, &framePtr, 0) == pdTRUE) {
+
           if (wsServer.connectedClients() > 0) {
 
               uint8_t packet[16 + WS_AUDIO_BUF_SAMPLES * 2];
@@ -926,11 +945,12 @@ void WiFiNetworkTask(void* pvParameters) {
 
               size_t samplesToCopy = min((uint16_t)framePtr->n_samples, (uint16_t)WS_AUDIO_BUF_SAMPLES);
               memcpy(packet+16, framePtr->samples, samplesToCopy * 2);
-              // Serial.printf("[Audio] Sending frame with %d samples at %d Hz\n", framePtr->n_samples, framePtr->freq_hz);      
+              // Serial.printf("[Audio] Sending frame with %d samples at %d Hz\n", framePtr->n_samples, framePtr->freq_hz);
               wsServer.broadcastBIN(packet, 16 + samplesToCopy * 2);
           }
           // Return frame to free pool
           xQueueSend(freeFrameQueue, &framePtr, 0);
+          sentAudioFrames++;
         }
 
         // ---- Send ADIF to websocket if available ----
@@ -944,15 +964,21 @@ void WiFiNetworkTask(void* pvParameters) {
             }
         }
 
-        // ---- Process FT8 messages received ----
+        // ---- get FT8 messages from the external ft8 decoder via websocket ----
         char ft8Msg[MAX_FT8_MSG];
-        while (xQueueReceive(ft8Queue, ft8Msg, 0) == pdTRUE) {
+        const uint8_t ft8Budget = (uxQueueMessagesWaiting(audioQueue) > 0)
+                                    ? FT8_MSGS_WHEN_AUDIO_PENDING
+                                    : FT8_MSGS_PER_LOOP_MAX;
+        uint8_t processedFt8Msgs = 0;
+        while (processedFt8Msgs < ft8Budget &&
+               xQueueReceive(ft8Queue, ft8Msg, 0) == pdTRUE) {
             //Serial.printf("[FT8 RX] %s\n", ft8Msg);
             if(ui_get_ws_server_enabled()) {
                 addFt8SpotFromJson(ft8Msg);
             }
             
             g_ft8LastRxMs = millis();   // mark traffic
+            processedFt8Msgs++;
         }
 
         // ---- Update global WiFi status variables ----
@@ -1063,7 +1089,7 @@ void wifi_config_setup() {
     if(ft8Queue == NULL) ft8Queue = xQueueCreate(8,  MAX_FT8_MSG);
 
     Serial.printf("[WiFi] Start network task on Core 0\n");
-    xTaskCreatePinnedToCore(NetworkTask, "NET", 36000, NULL, 1, NULL, 0); 
+    xTaskCreatePinnedToCore(NetworkTask, "NET", 36000, NULL, 3, NULL, 0); 
 }
 
 // ===== Audio Push =====

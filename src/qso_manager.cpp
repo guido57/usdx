@@ -2,6 +2,7 @@
 #include "ft8_freq_opt.h"
 #include "qsostats.h"
 #include "adif.h"
+#include "pskreporter.h"
 extern FT8FreqOptimizer ft8FreqOptimizer; // declared in main.cpp
 extern std::vector<FT8_TX::TxJob> txJobs; // declared in ft8_tx.cpp
 extern QSOStats qsoStats; // declared in wifi_config.cpp 
@@ -577,6 +578,26 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
     // store the decoded fields in the ft8_frequency_optimizer for frequency optimization (CQ density tracking)
     // Serial.println("Storing spot in ft8FreqOptimizer: freq=" + String(s.freq_hz) + " snr_db=" + String(s.snr_db) + " ts=" + String(f.ts) + " is_cq=" + String(f.is_cq) + " vfo_freq=" + String(ui_get_vfo_freq()));
     ft8FreqOptimizer.store(s.freq_hz, s.snr_db, f.ts, f.is_cq, ui_get_vfo_freq());
+
+    Ft8Spot psk_spot = s;
+    if(f.type <= MSG_CQ_TEST){
+        strlcpy(psk_spot.callsign, f.call1, sizeof(psk_spot.callsign));
+        if (f.hasGrid) {
+            strlcpy(psk_spot.grid, f.grid, sizeof(psk_spot.grid));
+        }
+    } else {
+        strlcpy(psk_spot.callsign, f.call2, sizeof(psk_spot.callsign));
+        if (f.hasGrid) {
+            strlcpy(psk_spot.grid, f.grid, sizeof(psk_spot.grid));
+        }
+    }   
+    
+    if (f.hasReport) {
+        strlcpy(psk_spot.report, f.report, sizeof(psk_spot.report));
+    }
+    strlcpy(psk_spot.decoding_software, "usdx", sizeof(psk_spot.decoding_software));
+    strlcpy(psk_spot.antenna_description, "unknown", sizeof(psk_spot.antenna_description));
+    send_pskreporter_packet(psk_spot);
 
     // generate the appropriate reply message based on the message type and extracted fields (maybe to move ahead)
     String reply = "";  

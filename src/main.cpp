@@ -257,7 +257,7 @@ static void processAudioPCM1808() {
           peakWarn(peakWebAudio) ||
           peakWarn(peakAudioOut);
 
-        //if (alert || warn) {
+        if (alert || warn) {
 
           Serial.printf(
             "[PEAK %s] IQ I=%5d Q=%5d | Aud=%5d | WS=%5d | OUT=%5d\n",
@@ -268,7 +268,7 @@ static void processAudioPCM1808() {
             peakWebAudio,
             peakAudioOut
           );
-        //}
+        }
 
       peakIDec = peakQDec = peakAudio = peakWebAudio = peakAudioOut = 0;
       peakLastMs = si5351_now;

@@ -429,10 +429,10 @@ void QSOStats::makeFilename(int index, char* out, size_t len)
 bool QSOStats::readRecord(int index, void* out)
 {
     char path[32];
-    Serial.printf("readRecord: Reading record at index %d\n", index);
+    //Serial.printf("readRecord: Reading record at index %d\n", index);
     makeFilename(index, path, sizeof(path));
 
-    Serial.printf("Reading record from flash: %s\n", path);
+    // Serial.printf("Reading record from flash: %s\n", path);
     File f = LogsFS.open(path, "r");
     if (!f){ 
         Serial.println("Failed to open file"); 

@@ -1,7 +1,10 @@
 #include "ft8_tx.h"
 #include "ft8/message.h"
-#include "ft8/encode.h"
-#include "ft8/constants.h"
+// #include "ft8/encode.h"
+#include "ft8_decode/encode.h"
+
+// #include "ft8/constants.h"
+#include "ft8_decode/constants.h"
 #include <time.h>
 //#include "rx_att_pwm.h"
 //#include "tx_bias_pwm.h"
@@ -50,7 +53,7 @@ bool FT8_TX::encodeMessage(const char *msg) {
     if (ftx_message_encode(&m, nullptr, msg) != FTX_MESSAGE_RC_OK)
         return false;
 
-    ft8_encode(m.payload, symbols);
+    ft8lib_encode(m.payload, symbols);
     return true;
 }
 
