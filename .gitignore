@@ -4,6 +4,11 @@
 .vscode/launch.json
 .vscode/ipch
 docs/usdx_kicad/.history/
+docs/usdx_kicad/*.lck
+docs/usdx_kicad/*.kicad_prl
+docs/usdx_kicad/*.bak
+docs/usdx_kicad/usdx_pcb/
+docs/usdx_kicad/usdx_pcb.zip
 
 # Ignore local secrets
 **/secrets.h
