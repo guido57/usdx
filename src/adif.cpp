@@ -105,7 +105,7 @@ String Adif::buildAdif(const QSO& qso, uint32_t freq_hz, char * bandname, char *
 {
     String s;
     bool call1_isDx = strcmp(qso.call1, ui_get_mycall()) != 0; 
-    if(!call1_isDx && strcmp(qso.call2, ui_get_mycall()) != 0 ) {
+    if(call1_isDx && strcmp(qso.call2, ui_get_mycall()) != 0 ) {
         // Neither call1 nor call2 is DX, this is unexpected, return empty string to avoid confusion
         return "";
     }
