@@ -305,6 +305,12 @@ Ft8MsgType QSOManager::parseMessage(const char *msg, Ft8Fields &out) {
             p++;
         }
     }
+
+    // Empty or whitespace-only payloads cannot be parsed further.
+    if (ntok == 0) {
+        return MSG_UNKNOWN;
+    }
+
     // --------------------------------------------------------
     // Early reject obvious garbage like "A1 B2"
     // --------------------------------------------------------
