@@ -197,7 +197,7 @@ static void handleApiUi() {
         return;
     }
     JsonDocument doc;
-    doc["vfoA"] = s.vfoA; doc["vfoB"] = s.vfoB; doc["vfoSel"] = s.vfoSel;
+    doc["vfoA"] = s.vfoA; 
     doc["ft8_offset"] = s.ft8_offset;
     doc["ft8_offset_enabled"] = s.ft8_offset_enabled;
     doc["ft8_testmsg"] = s.ft8_testmsg;
@@ -206,12 +206,14 @@ static void handleApiUi() {
     doc["ws_server_enabled"] = s.ws_server_enabled;
     doc["mycall"] = s.mycall;
     doc["mygrid"] = s.mygrid;
+    doc["myantenna"] = s.myantenna;
+    doc["mysoftware"] = s.mysoftware;   
+    doc["myrig"] = s.myrig; 
     doc["mode"] = s.mode; doc["bandval"] = s.bandval; doc["stepsize"] = s.stepsize;
-    doc["rit"] = s.rit; doc["ritActive"] = s.ritActive; doc["volume"] = s.volume;
+    doc["volume"] = s.volume;
     doc["filt"] = s.filt; doc["agc"] = s.agc; doc["nr"] = s.nr; doc["att"] = s.att;
-    doc["smode"] = s.smode; doc["cw_tone"] = s.cw_tone; doc["cw_offset"] = s.cw_offset;
-    doc["vox"] = s.vox; doc["vox_gain"] = s.vox_gain; doc["drive"] = s.drive;
-    doc["txdelay"] = s.txdelay; doc["mox"] = s.mox; doc["backlight"] = s.backlight;
+    doc["smode"] = s.smode;
+    doc["backlight"] = s.backlight;
     doc["sifxtal"] = s.sifxtal; doc["iq_phase"] = s.iq_phase;
     doc["iq_balance"] = s.iq_balance; doc["iq_delay"] = s.iq_delay; doc["wf_thresh"] = s.wf_thresh;
     String out;
@@ -241,18 +243,18 @@ static void handleApiUiSave() {
     #define JSET(name) if (!doc[#name].isNull()) s.name = doc[#name];
     // Safely copy the string from the JSON document
     #define JSET_STRING(name) strlcpy(s.name, doc[#name] | "", sizeof(s.name));
-
-    JSET(vfoA); JSET(vfoB); JSET(vfoSel); 
+    JSET(vfoA);
     JSET(ft8_offset); JSET(ft8_offset_enabled); JSET_STRING(ft8_testmsg); 
     JSET_STRING(ws_server_host);
     JSET(ws_server_port); 
     JSET(ws_server_enabled);
     JSET_STRING(mycall); JSET_STRING(mygrid); 
+    JSET_STRING(myantenna); JSET_STRING(mysoftware); JSET_STRING(myrig);
     JSET(mode); JSET(bandval);
-    JSET(stepsize); JSET(rit); JSET(ritActive); JSET(volume);
+    JSET(stepsize); 
+    JSET(volume);
     JSET(filt); JSET(agc); JSET(nr); JSET(att); JSET(smode);
-    JSET(cw_tone); JSET(cw_offset); JSET(vox); JSET(vox_gain);
-    JSET(drive); JSET(txdelay); JSET(mox); JSET(backlight);
+    JSET(backlight);
     JSET(sifxtal); JSET(iq_phase); JSET(iq_balance); JSET(iq_delay);
     JSET(wf_thresh);
 

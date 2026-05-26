@@ -29,6 +29,9 @@ static bool ft8_offset_enabled = false;
 static char ft8_testmsg[64] = ""; // FT8 test message
 static char mycall[10] = ""; // my callsign
 static char mygrid[8] = ""; // my grid locator
+static char myantenna[32] = ""; // my antenna description for pskreporter
+static char mysoftware[32] = ""; // my software name for pskreporter
+static char myrig[32] = ""; // my rig name for pskreporter
 static char ws_server_host[16] = "0.0.0.0"; // WebSocket server host 
 static uint16_t ws_server_port = 0; // WebSocket server port
 static bool ws_server_enabled = false;
@@ -112,6 +115,9 @@ int8_t ui_get_volume() { return volume; }
 
 char * ui_get_mycall() { return mycall; }
 char * ui_get_mygrid() { return mygrid; } 
+char * ui_get_myantenna() { return myantenna; }
+char * ui_get_mysoftware() { return mysoftware; }
+char * ui_get_myrig() { return myrig; }
 char * ui_get_ft8_testmsg() { return ft8_testmsg; }
 char * ui_get_ws_server_host() { return ws_server_host; }
 uint16_t ui_get_ws_server_port() { return ws_server_port; }
@@ -184,9 +190,7 @@ static void loadSettings() {
   if (s.magic != kSettingsMagic || s.version != kSettingsVersion) return;
 
   stepsize = constrain((int)s.stepsize, (int)STEP_1M, (int)STEP_1);
-  vfoSel = s.vfoSel ? 1 : 0;
   vfo[0] = constrain(s.vfoA, 1, 999999999);
-  vfo[1] = constrain(s.vfoB, 1, 999999999);
   ft8_offset = constrain(s.ft8_offset, 0, 3000);
   ft8_offset_enabled = (s.ft8_offset_enabled != 0);
   strlcpy(ft8_testmsg, s.ft8_testmsg, sizeof(ft8_testmsg));
@@ -195,9 +199,10 @@ static void loadSettings() {
   ws_server_enabled = (s.ws_server_enabled != 0);
   strlcpy(mycall, s.mycall, sizeof(mycall));
   strlcpy(mygrid, s.mygrid, sizeof(mygrid));
+  strlcpy(myantenna, s.myantenna, sizeof(myantenna));
+  strlcpy(mysoftware, s.mysoftware, sizeof(mysoftware));
+  strlcpy(myrig, s.myrig, sizeof(myrig));
   bandval = constrain(s.bandval, 0, (int32_t)N_BANDS - 1);
-  rit = constrain(s.rit, (int16_t)-9999, (int16_t)9999);
-  ritActive = (s.ritActive != 0);
   volume = constrain(s.volume, (int8_t)0, (int8_t)10);
   filt = constrain(s.filt, (int8_t)0, (int8_t)7);
   agc = constrain(s.agc, (int8_t)0, (int8_t)1);
@@ -206,13 +211,6 @@ static void loadSettings() {
   att_rf = constrain(s.att_rf, (int8_t)0, (int8_t)30);
   tx_bias = constrain(s.tx_bias, (int8_t)0, (int8_t)33);
   smode = constrain(s.smode, (int8_t)0, (int8_t)6);
-  cw_tone = constrain(s.cw_tone, (int8_t)0, (int8_t)5);
-  cw_offset = constrain(s.cw_offset, (int16_t)300, (int16_t)1200);
-  vox = constrain(s.vox, (int8_t)0, (int8_t)1);
-  vox_gain = constrain(s.vox_gain, (int8_t)0, (int8_t)100);
-  drive = constrain(s.drive, (int8_t)0, (int8_t)10);
-  txdelay = constrain(s.txdelay, (int16_t)0, (int16_t)500);
-  mox = constrain(s.mox, (int8_t)0, (int8_t)1);
   backlight = constrain(s.backlight, (int8_t)0, (int8_t)1);
   sifxtal = constrain(s.sifxtal, 10000000, 40000000);
   iq_phase = constrain(s.iq_phase, (int16_t)30, (int16_t)150);
@@ -232,12 +230,10 @@ bool ui_get_settings(UiSettings* out) {
   out->magic = kSettingsMagic;
   out->version = kSettingsVersion;
   out->stepsize = stepsize;
-  out->vfoSel = vfoSel;
   out->mode = (uint8_t)mode;
   out->vfomode0 = (uint8_t)vfomode[0];
   out->vfomode1 = (uint8_t)vfomode[1];
   out->vfoA = vfo[0];
-  out->vfoB = vfo[1];
   out->bandval = bandval;
   out->ft8_offset = ft8_offset;
   out->ft8_offset_enabled = ft8_offset_enabled ? 1 : 0;
@@ -247,8 +243,9 @@ bool ui_get_settings(UiSettings* out) {
   out->ws_server_enabled = ws_server_enabled ? 1 : 0;
   strlcpy(out->mycall, mycall, sizeof(out->mycall));
   strlcpy(out->mygrid, mygrid, sizeof(out->mygrid));
-  out->rit = rit;
-  out->ritActive = ritActive ? 1 : 0;
+  strlcpy(out->myantenna, myantenna, sizeof(out->myantenna));
+  strlcpy(out->mysoftware, mysoftware, sizeof(out->mysoftware));
+  strlcpy(out->myrig, myrig, sizeof(out->myrig));
   out->volume = volume;
   out->filt = filt;
   out->agc = agc;
@@ -257,13 +254,6 @@ bool ui_get_settings(UiSettings* out) {
   out->att_rf = att_rf;
   out->tx_bias = tx_bias;
   out->smode = smode;
-  out->cw_tone = cw_tone;
-  out->cw_offset = cw_offset;
-  out->vox = vox;
-  out->vox_gain = vox_gain;
-  out->drive = drive;
-  out->txdelay = txdelay;
-  out->mox = mox;
   out->backlight = backlight;
   out->sifxtal = sifxtal;
   out->iq_phase = iq_phase;
@@ -275,9 +265,7 @@ bool ui_get_settings(UiSettings* out) {
 
 void ui_apply_settings(const UiSettings& s) {
   stepsize = constrain((int)s.stepsize, (int)STEP_1M, (int)STEP_1);
-  vfoSel = s.vfoSel ? 1 : 0;
   vfo[0] = constrain(s.vfoA, 1, 999999999);
-  vfo[1] = constrain(s.vfoB, 1, 999999999);
   ft8_offset = constrain(s.ft8_offset, 0, 3000);
   ft8_offset_enabled = (s.ft8_offset_enabled != 0);
   strlcpy(ft8_testmsg, s.ft8_testmsg, sizeof(ft8_testmsg));
@@ -286,10 +274,11 @@ void ui_apply_settings(const UiSettings& s) {
   ws_server_enabled = (s.ws_server_enabled != 0);
   strlcpy(mycall, s.mycall, sizeof(mycall));
   strlcpy(mygrid, s.mygrid, sizeof(mygrid));
+  strlcpy(myantenna, s.myantenna, sizeof(myantenna));
+  strlcpy(mysoftware, s.mysoftware, sizeof(mysoftware));
+  strlcpy(myrig, s.myrig, sizeof(myrig));
   bandval = constrain(s.bandval, 0, (int32_t)N_BANDS - 1);
-  Serial.printf("Applying settings: vfoA=%u, vfoB=%u, vfoSel=%u, mode=%u, bandval=%u\n", s.vfoA, s.vfoB, s.vfoSel, s.mode, s.bandval);
-  rit = constrain(s.rit, (int16_t)-9999, (int16_t)9999);
-  ritActive = (s.ritActive != 0);
+  Serial.printf("Applying settings: vfoA=%u, vfoB=%u, vfoSel=%u, mode=%u, bandval=%u\n", s.vfoA, s.mode, s.bandval);
   volume = constrain(s.volume, (int8_t)0, (int8_t)10);
   filt = constrain(s.filt, (int8_t)0, (int8_t)7);
   agc = constrain(s.agc, (int8_t)0, (int8_t)1);
@@ -298,13 +287,6 @@ void ui_apply_settings(const UiSettings& s) {
   att_rf = constrain(s.att_rf, (int8_t)0, (int8_t)30);
   tx_bias = constrain(s.tx_bias, (int8_t)0, (int8_t)33);
   smode = constrain(s.smode, (int8_t)0, (int8_t)6);
-  cw_tone = constrain(s.cw_tone, (int8_t)0, (int8_t)5);
-  cw_offset = constrain(s.cw_offset, (int16_t)300, (int16_t)1200);
-  vox = constrain(s.vox, (int8_t)0, (int8_t)1);
-  vox_gain = constrain(s.vox_gain, (int8_t)0, (int8_t)100);
-  drive = constrain(s.drive, (int8_t)0, (int8_t)10);
-  txdelay = constrain(s.txdelay, (int16_t)0, (int16_t)500);
-  mox = constrain(s.mox, (int8_t)0, (int8_t)1);
   backlight = constrain(s.backlight, (int8_t)0, (int8_t)1);
   sifxtal = constrain(s.sifxtal, 10000000, 40000000);
   iq_phase = constrain(s.iq_phase, (int16_t)30, (int16_t)150);
@@ -327,12 +309,10 @@ static void saveSettings() {
   s.magic = kSettingsMagic;
   s.version = kSettingsVersion;
   s.stepsize = stepsize;
-  s.vfoSel = vfoSel;
   s.mode = (uint8_t)mode;
   s.vfomode0 = (uint8_t)vfomode[0];
   s.vfomode1 = (uint8_t)vfomode[1];
   s.vfoA = vfo[0];
-  s.vfoB = vfo[1];
   s.ft8_offset = ft8_offset;
   s.ft8_offset_enabled = ft8_offset_enabled ? 1 : 0;
   strlcpy(s.ft8_testmsg, ft8_testmsg, sizeof(s.ft8_testmsg));
@@ -341,10 +321,11 @@ static void saveSettings() {
   s.ws_server_enabled = ws_server_enabled ? 1 : 0;
   strlcpy(s.mycall, mycall, sizeof(s.mycall));
   strlcpy(s.mygrid, mygrid, sizeof(s.mygrid));
+  strlcpy(s.myantenna, myantenna, sizeof(s.myantenna));
+  strlcpy(s.mysoftware, mysoftware, sizeof(s.mysoftware));
+  strlcpy(s.myrig, myrig, sizeof(s.myrig));
   s.bandval = bandval;
   // Serial.printf("Saving settings: vfoA=%u, vfoB=%u, vfoSel=%u, mode=%u, bandval=%u\n", s.vfoA, s.vfoB, s.vfoSel, s.mode, s.bandval);
-  s.rit = rit;
-  s.ritActive = ritActive ? 1 : 0;
   s.volume = volume;
   s.filt = filt;
   s.agc = agc;
@@ -353,13 +334,6 @@ static void saveSettings() {
   s.att_rf = att_rf;
   s.tx_bias = tx_bias;
   s.smode = smode;
-  s.cw_tone = cw_tone;
-  s.cw_offset = cw_offset;
-  s.vox = vox;
-  s.vox_gain = vox_gain;
-  s.drive = drive;
-  s.txdelay = txdelay;
-  s.mox = mox;
   s.backlight = backlight;
   s.sifxtal = sifxtal;
   s.iq_phase = iq_phase;

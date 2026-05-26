@@ -130,10 +130,11 @@ void send_pskreporter_packet(const Ft8Spot& spot)
 #else
     init_receiver_id();
 
-    const char* receiver_callsign = is_non_empty(spot.receiver_callsign) ? spot.receiver_callsign : ui_get_mycall();
-    const char* receiver_grid = is_non_empty(spot.receiver_grid) ? spot.receiver_grid : ui_get_mygrid();
-    const char* decoding_software = is_non_empty(spot.decoding_software) ? spot.decoding_software : "usdx";
-    const char* antenna_description = is_non_empty(spot.antenna_description) ? spot.antenna_description : "unknown";
+    const char* receiver_callsign = ui_get_mycall();
+    const char* receiver_grid = ui_get_mygrid();
+    const char* decoding_software = ui_get_mysoftware();
+    const char* antenna_description = ui_get_myantenna();
+    const char* rig_description = ui_get_myrig();
     const char* callsign = spot.callsign;
     const char* locator = spot.grid;
     const char* mode = is_non_empty(spot.mode) ? spot.mode : "FT8";
@@ -149,11 +150,13 @@ void send_pskreporter_packet(const Ft8Spot& spot)
     receiver_body_len = append_string(receiver_body, receiver_body_len, sizeof(receiver_body), receiver_grid);
     receiver_body_len = append_string(receiver_body, receiver_body_len, sizeof(receiver_body), decoding_software);
     receiver_body_len = append_string(receiver_body, receiver_body_len, sizeof(receiver_body), antenna_description);
+    receiver_body_len = append_string(receiver_body, receiver_body_len, sizeof(receiver_body), rig_description);
     receiver_body_len = pad_to_4(receiver_body, receiver_body_len, sizeof(receiver_body));
     if (receiver_body_len == sizeof(receiver_body)) {
         Serial.println("[psk] skip spot: receiver block overflow");
         return;
-    }
+    }else
+        Serial.printf("[psk] receiver block: %s\n", (char *) receiver_body);
 
     uint8_t sender_body[160];
     size_t sender_body_len = 0;
@@ -173,13 +176,14 @@ void send_pskreporter_packet(const Ft8Spot& spot)
     }
 
     static const uint8_t receiver_header[] = {
-        0x00, 0x03, 0x00, 0x2C,
+        0x00, 0x03, 0x00, 0x34,
         0x99, 0x92,
-        0x00, 0x04, 0x00, 0x01,
+        0x00, 0x05, 0x00, 0x01,
         0x80, 0x02, 0xFF, 0xFF, 0x00, 0x00, 0x76, 0x8F,
         0x80, 0x04, 0xFF, 0xFF, 0x00, 0x00, 0x76, 0x8F,
         0x80, 0x08, 0xFF, 0xFF, 0x00, 0x00, 0x76, 0x8F,
         0x80, 0x09, 0xFF, 0xFF, 0x00, 0x00, 0x76, 0x8F,
+        0x80, 0x0D, 0xFF, 0xFF, 0x00, 0x00, 0x76, 0x8F,
         0x00, 0x00
     };
 
@@ -258,6 +262,5 @@ void send_pskreporter_packet(const Ft8Spot& spot)
         return;
     }
 
-    // Serial.printf("[psk] sent spot %s @ %u Hz SNR %d\n", callsign, (unsigned)spot.freq_hz, (int)spot.snr_db);
 #endif
 }
