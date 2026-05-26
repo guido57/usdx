@@ -585,6 +585,7 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
     // Serial.println("Storing spot in ft8FreqOptimizer: freq=" + String(s.freq_hz) + " snr_db=" + String(s.snr_db) + " ts=" + String(f.ts) + " is_cq=" + String(f.is_cq) + " vfo_freq=" + String(ui_get_vfo_freq()));
     ft8FreqOptimizer.store(s.freq_hz, s.snr_db, f.ts, f.is_cq, ui_get_vfo_freq());
 
+    // Prepare and send PSKReporter spot for this message
     Ft8Spot psk_spot = s;
     if(f.type <= MSG_CQ_TEST){
         strlcpy(psk_spot.callsign, f.call1, sizeof(psk_spot.callsign));
@@ -601,8 +602,6 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
     if (f.hasReport) {
         strlcpy(psk_spot.report, f.report, sizeof(psk_spot.report));
     }
-    strlcpy(psk_spot.decoding_software, "usdx", sizeof(psk_spot.decoding_software));
-    strlcpy(psk_spot.antenna_description, "unknown", sizeof(psk_spot.antenna_description));
     send_pskreporter_packet(psk_spot);
 
     // generate the appropriate reply message based on the message type and extracted fields (maybe to move ahead)
@@ -639,6 +638,7 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
         addLog(q, 'R', timestamp, q->state, msg);
     }
     
+    // manage QSO_END
     if (q->state == QSO_DONE){
         if (!q->counted_in_stats) {
             int band = freqToBand(s.freq_hz);
@@ -656,23 +656,16 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
         }    
     }    
 
+    // if the message is directed to me
     if(strcmp(f.call1, ui_get_mycall()) == 0) {
 
         Serial.println("with msg " + String(msg) + " I decoded f.call1=" + String(f.call1) + " f.call2=" + String(f.call2) + " message type " + String(type) + " QSO state is " + String(q->state) + ". Generated reply: " + reply + " reply type: " + String(reply_type) );
 
         // check any pending retry for this QSO 
         FT8_TX::TxJob * pendingJob = ft8tx.getNextPendingJob(q->qso_id);
-        if(pendingJob != nullptr){
-            //Serial.printf("Next pending job for QSO %d: message: %s, type: %d\r\n", q->qso_id, pendingJob->message, pendingJob->msgType);
-        } else {
-            //Serial.printf("No pending job for QSO %d\r\n", q->qso_id);
-        }
-        
-        if(pendingJob != nullptr && pendingJob->msgType >= reply_type){
+                if(pendingJob != nullptr && pendingJob->msgType >= reply_type){
             //Serial.printf("Found pending transmission for QSO %d, message: %s, type: %d\r\n", q->qso_id, pendingJob->message, pendingJob->msgType);
-        
         }else {
-
             ft8tx.cancelJobsForQso(q->qso_id); // cancel any pending transmission for this QSO, we will schedule a new one with the updated message (reply)    
             
             uint8_t theirParity = ((q->lastHeard / 15) % 2);
