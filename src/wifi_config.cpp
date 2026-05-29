@@ -1090,7 +1090,7 @@ void wifi_config_setup() {
 
     if(ft8Queue == NULL) ft8Queue = xQueueCreate(8,  MAX_FT8_MSG);
 
-    Serial.printf("[WiFi] Start network task on Core 0\n");
+    Serial.printf("Start network task on Core 0\n");
     xTaskCreatePinnedToCore(NetworkTask, "NET", 36000, NULL, 3, NULL, 0); 
 }
 
