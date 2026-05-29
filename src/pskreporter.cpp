@@ -155,8 +155,9 @@ void send_pskreporter_packet(const Ft8Spot& spot)
     if (receiver_body_len == sizeof(receiver_body)) {
         Serial.println("[psk] skip spot: receiver block overflow");
         return;
-    }else
-        Serial.printf("[psk] receiver block: %s\n", (char *) receiver_body);
+    }
+    // else
+    //     Serial.printf("[psk] receiver block: %s\n", (char *) receiver_body);
 
     uint8_t sender_body[160];
     size_t sender_body_len = 0;
