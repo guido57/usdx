@@ -621,7 +621,7 @@ let queuedSamples=0;
 let audioPrimed=false;
 let concealSamples=0;
 let lastSample=0;
-const AUDIO_PRIME_SAMPLES=8192;
+const AUDIO_PRIME_SAMPLES=1024;
 const AUDIO_MAX_CONCEAL_SAMPLES=8000;
 const statusEl=document.getElementById('audioStatus');
 
@@ -678,7 +678,7 @@ function startAudio(){
   lastSample=0;
   audioCtx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:8000});
   audioCtx.resume();
-  node=audioCtx.createScriptProcessor(2048,0,1);
+  node=audioCtx.createScriptProcessor(512,0,1);
   node.onaudioprocess=onAudio;
   node.connect(audioCtx.destination);
   ws=new WebSocket('ws://ft8-esp32.local:8765');
@@ -706,7 +706,7 @@ function startAudio(){
     queuedSamples += samples;
 
     // Limit backlog growth if browser tab stalls.
-    while(queue.length > 96){
+    while(queue.length > 24){
       const dropped = queue.shift();
       if(dropped){
         queuedSamples -= dropped.length;
