@@ -75,7 +75,7 @@ static DemodMode ui_mode_to_demod_mode(UiMode mode) {
 static float agcGain      = 1.0f;
 static float agcEnvelope  = 0.0f;
 
-#define AGC_TARGET        9000.0f   // target peak level
+#define AGC_TARGET        4000.0f   // target peak level
 #define AGC_ATTACK_TC     0.005f     // 5 ms
 #define AGC_RELEASE_TC    0.300f     // 300 ms
 #define AGC_SAMPLE_RATE   8000.0f    // audio rate
@@ -203,7 +203,6 @@ static void processAudioPCM1808() {
       // Never block the audio loop; drop FT8 sample if decoder queue is full.
       (void)ft8_consumer_module_enqueue_i16(&audioSample, 1, 0);
 
-
       // =========== AGC (if enabled) ===========
       // apply AGC if enabled in UI (AGC should be applied before volume control and peak measurement)
       audioSample = applyAGC(audioSample);
@@ -212,7 +211,7 @@ static void processAudioPCM1808() {
       if (absAudio > peakAudio) peakAudio = absAudio;
       
       // ===== VOLUME CONTROL =====
-      int32_t loudAudio = ((int32_t)audioSample * audioVolume) / 20; // scale volume (0-10) to 0.0-0.5 range
+      int32_t loudAudio = ((int32_t)audioSample * audioVolume) / 10; // scale volume (0-10) to 0.0-0.1 range
 
       // limiter
       if (loudAudio > 32767) loudAudio = 32767;
@@ -220,7 +219,7 @@ static void processAudioPCM1808() {
 
       int16_t out16 = (int16_t)loudAudio;
 
-      // ===== PEAK AUDIO OUTPUT =====
+      // ===== PEAK AUDIO OUTPUT (LOUDSPEAKER) =====
       int16_t absOut = fastAbs16(out16);
       if (absOut > peakAudioOut) peakAudioOut = absOut;
 
