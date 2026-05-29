@@ -7,50 +7,82 @@
 
 #define I2S_NUM I2S_NUM_0
 
-static bool initialized = false;
+namespace {
 
-static float y0_cos = 0.0f;
-static float y1_cos = 0.70710678f;  // initial phase
-static float k_cos;
+constexpr size_t kOutputChunkSamples = 64;
+constexpr size_t kAudioQueueDepth = 2048;
 
-static QueueHandle_t i2s_event_queue;
+static QueueHandle_t g_audio_sample_queue = nullptr;
+static TaskHandle_t g_audio_writer_task = nullptr;
+static volatile bool g_audio_writer_running = false;
 
-void i2sTask(void *arg)
+static void i2sAudioWriterTask(void* arg)
 {
-    i2s_event_t event;
-    int16_t block[128];  // 64 stereo frames
+    (void)arg;
+    int16_t mono_samples[kOutputChunkSamples];
+    int16_t i2s_frames_lr[kOutputChunkSamples * 2];
 
-    while (true)
+    g_audio_writer_running = true;
+    while (g_audio_writer_running)
     {
-        if (xQueueReceive(i2s_event_queue, &event, portMAX_DELAY))
+        int16_t first = 0;
+        if (xQueueReceive(g_audio_sample_queue, &first, pdMS_TO_TICKS(20)) != pdTRUE)
         {
-            if (event.type == I2S_EVENT_TX_DONE)
+            // No sample available for this chunk window: output silence.
+            memset(i2s_frames_lr, 0, sizeof(i2s_frames_lr));
+        }
+        else
+        {
+            mono_samples[0] = first;
+            size_t n = 1;
+            while (n < kOutputChunkSamples)
             {
-                // DMA consumed one block
-                // Generate next 64 samples
-
-                for (int i = 0; i < 64; i++)
+                if (xQueueReceive(g_audio_sample_queue, &mono_samples[n], 0) != pdTRUE)
                 {
-                    float y = k_cos * y1_cos - y0_cos;
-                    y0_cos = y1_cos;
-                    y1_cos = y;
-
-                    int16_t s = (int16_t)(y * 2000);
-
-                    block[i*2]   = s;   // Left
-                    block[i*2+1] = s;   // Right
+                    break;
                 }
+                n++;
+            }
 
-                size_t bytes_written;
-                i2s_write(I2S_NUM_1,
-                          block,
-                          sizeof(block),
-                          &bytes_written,
-                          portMAX_DELAY);
+            if (n < kOutputChunkSamples)
+            {
+                const int16_t hold = mono_samples[n - 1];
+                while (n < kOutputChunkSamples)
+                {
+                    mono_samples[n++] = hold;
+                }
+            }
+
+            // Content is mono, transport is stereo I2S: duplicate each sample on L and R.
+            for (size_t i = 0; i < kOutputChunkSamples; ++i)
+            {
+                i2s_frames_lr[i * 2] = mono_samples[i];
+                i2s_frames_lr[i * 2 + 1] = mono_samples[i];
             }
         }
+
+        size_t bytes_written = 0;
+        const size_t bytes_to_write = sizeof(i2s_frames_lr);
+        esp_err_t err = i2s_write(I2S_NUM_1,
+                                  i2s_frames_lr,
+                                  bytes_to_write,
+                                  &bytes_written,
+                                  portMAX_DELAY);
+        if (err == ESP_OK && bytes_written == bytes_to_write)
+        {
+        }
+        else
+        {
+            (void)bytes_written;
+        }
     }
+
+    vTaskDelete(nullptr);
 }
+
+} // namespace
+
+static bool initialized = false;
 
 bool audio_i2s_setup()
 {
@@ -82,62 +114,6 @@ bool audio_i2s_setup()
         .data_in_num = I2S_PIN_NO_CHANGE};
 
     // Install and start I2S driver
-    // esp_err_t err = i2s_driver_install(I2S_NUM_1, &i2s_config, 0, NULL);
-    esp_err_t err = i2s_driver_install(I2S_NUM_1, &i2s_config, 4, &i2s_event_queue);
-    if (err != ESP_OK)
-    {
-        Serial.printf("Failed to install I2S driver: %d\n", err);
-        return false;
-    }
-
-    err = i2s_set_pin(I2S_NUM_1, &pin_config);
-    if (err != ESP_OK)
-    {
-        Serial.printf("Failed to set I2S pins: %d\n", err);
-        i2s_driver_uninstall(I2S_NUM_1);
-        return false;
-    }
-
-    initialized = true;
-
-    Serial.printf("I2S initialized: %dHz stereo (mono via MAX98357), BCLK=%d, LRC=%d, DOUT=%d\n",
-                  AUDIO_I2S_SAMPLE_RATE, GPIO_I2S_BCLK, GPIO_I2S_LRC, GPIO_I2S_DOUT);
-
-    return true;
-}
-
-
-bool audio_i2s_setup_with_dma()
-{
-    if (initialized)
-    {
-        Serial.println("I2S already initialized");
-        return true;
-    }
-
-    // Legacy I2S Configuration (PSRAM compatible)
-    i2s_config_t i2s_config = {
-        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-        .sample_rate = AUDIO_I2S_SAMPLE_RATE,
-        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 8,
-        .dma_buf_len = 64,
-        .use_apll = false,
-        .tx_desc_auto_clear = true,
-        .fixed_mclk = 0,
-    };
-
-    i2s_pin_config_t pin_config = {
-        .bck_io_num = GPIO_I2S_BCLK,
-        .ws_io_num = GPIO_I2S_LRC,
-        .data_out_num = GPIO_I2S_DOUT,
-        .data_in_num = I2S_PIN_NO_CHANGE};
-
-    // Install and start I2S driver
-    // esp_err_t err = i2s_driver_install(I2S_NUM_1, &i2s_config, 0, NULL);
     esp_err_t err = i2s_driver_install(I2S_NUM_1, &i2s_config, 0, NULL);
     if (err != ESP_OK)
     {
@@ -153,22 +129,52 @@ bool audio_i2s_setup_with_dma()
         return false;
     }
 
+    if (g_audio_sample_queue == nullptr)
+    {
+        g_audio_sample_queue = xQueueCreate(kAudioQueueDepth, sizeof(int16_t));
+        if (g_audio_sample_queue == nullptr)
+        {
+            Serial.println("Failed to create I2S sample queue");
+            i2s_driver_uninstall(I2S_NUM_1);
+            return false;
+        }
+    }
 
-    audio_i2s_start_task(); // Start I2S task to continuously read from PCM1808 and output to MAX98357  
+    if (g_audio_writer_task == nullptr)
+    {
+        BaseType_t result = xTaskCreate(i2sAudioWriterTask,
+                                        "i2sAudioWriter",
+                                        4096,
+                                        nullptr,
+                                        6,
+                                        &g_audio_writer_task);
+        if (result != pdPASS)
+        {
+            Serial.println("Failed to create I2S writer task");
+            vQueueDelete(g_audio_sample_queue);
+            g_audio_sample_queue = nullptr;
+            i2s_driver_uninstall(I2S_NUM_1);
+            return false;
+        }
+    }
+
+    initialized = true;
 
     Serial.printf("I2S initialized: %dHz stereo (mono via MAX98357), BCLK=%d, LRC=%d, DOUT=%d\n",
                   AUDIO_I2S_SAMPLE_RATE, GPIO_I2S_BCLK, GPIO_I2S_LRC, GPIO_I2S_DOUT);
 
-
-    initialized = true;
-
     return true;
+}
+
+
+bool audio_i2s_setup_with_dma()
+{
+    return audio_i2s_setup();
 }
 
 esp_err_t audio_i2s_start_task()
 {
-    BaseType_t result = xTaskCreate(i2sTask, "i2sTask", 4096, NULL, 5, NULL);
-    return (result == pdPASS) ? ESP_OK : ESP_FAIL  ;
+    return initialized ? ESP_OK : ESP_FAIL;
 }
 
 bool audio_i2s_write_sample(int16_t sample)
@@ -178,14 +184,16 @@ bool audio_i2s_write_sample(int16_t sample)
         return false;
     }
 
-    // MAX98357 needs stereo format - send same sample to both channels
-    int16_t stereoSample[2] = {sample, sample};
-    size_t bytes_written = 0;
+    if (g_audio_sample_queue == nullptr)
+    {
+        return false;
+    }
 
-    // Use short timeout (1ms) instead of blocking indefinitely to keep main loop responsive
-    esp_err_t err = i2s_write(I2S_NUM_1, stereoSample, sizeof(stereoSample), &bytes_written, pdMS_TO_TICKS(1));
-
-    return (err == ESP_OK && bytes_written == sizeof(stereoSample));
+    if (xQueueSend(g_audio_sample_queue, &sample, 0) != pdTRUE)
+    {
+        return false;
+    }
+    return true;
 }
 
 size_t audio_i2s_write_samples(const int16_t *samples, size_t count)
@@ -216,6 +224,23 @@ void audio_i2s_stop()
 {
     if (initialized)
     {
+        g_audio_writer_running = false;
+        if (g_audio_writer_task != nullptr)
+        {
+            vTaskDelay(pdMS_TO_TICKS(1));
+            if (eTaskGetState(g_audio_writer_task) != eDeleted)
+            {
+                vTaskDelete(g_audio_writer_task);
+            }
+            g_audio_writer_task = nullptr;
+        }
+
+        if (g_audio_sample_queue != nullptr)
+        {
+            vQueueDelete(g_audio_sample_queue);
+            g_audio_sample_queue = nullptr;
+        }
+
         i2s_driver_uninstall(I2S_NUM_1);
         initialized = false;
         Serial.println("I2S stopped");
