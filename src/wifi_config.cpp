@@ -15,6 +15,7 @@
 #include <vector>
 #include <string>
 #include <mutex>
+#include <freertos/FreeRTOS.h>
 #include "qso_manager.h"
 #include "ft8_tx.h"
 #include "secrets.h"
@@ -25,6 +26,7 @@
 extern FT8_TX ft8tx; // declared in main.cpp
 extern FT8FreqOptimizer ft8FreqOptimizer; // declared in main.cpp
 extern QSOStats qsoStats; // declared in main.cpp 
+extern std::vector<FT8_TX::TxJob> txJobs; // declared in ft8_tx.cpp
 
 static WebServer server(80);
 static WebSocketsServer wsServer(8765);  // Default port; will be updated from UI settings
@@ -336,28 +338,34 @@ static void handleFt8Send() {
     deserializeJson(doc, server.arg("plain"));
     int freq = doc["freq"] | 0;
     String msg = doc["msg"] | "";
-    // String reply;
 
-    // create a new QSO entry for this outgoing message (for tracking in UI)
-    Ft8Fields f;
-    Ft8MsgType type = qsoManager.parseMessage(msg.c_str(),f);
-    if(type == MSG_UNKNOWN) {
-        server.send(400, "application/json", "{\"error\":\"unrecognized message format\"}");
+    uint32_t nowTsSec = (uint32_t)(utc_ms() / 1000ULL);
+    uint8_t parity = ((nowTsSec / 15) + 1) % 2; // next FT8 slot parity
+
+    QSOManager::TxEnqueuePlan txPlan = qsoManager.prepareOutgoingTx(msg.c_str(), nowTsSec, parity);
+    if (!txPlan.ok) {
+        const char* errorText = txPlan.error ? txPlan.error : "failed to prepare outgoing tx";
+        String resp = String("{\"error\":\"") + errorText + "\"}";
+        server.send(400, "application/json", resp);
         return;
     }
-    
-    f.ts  = utc_ms() / 1000; // current time in seconds   
-    uint8_t parity = ((f.ts / 15) + 1) % 2; // simple parity based on next time slot
-    QSO * q = qsoManager.addOrUpdate(f.type,f,f.ts, parity); //, reply); // create a new QSO entry and get its ID
-    
-    Serial.printf("Scheduling FT8 TX for QSO %d at %d Hz: %s myParity=%d\r\n", 
-            q->qso_id, ui_get_vfo_freq() + ui_get_ft8_offset(), msg.c_str(), parity);
-            ft8tx.requestTransmission(freq, msg.c_str(),type, parity, q->qso_id);
+
+    Serial.printf("Scheduling FT8 TX for QSO %u at %d Hz: %s myParity=%u\r\n",
+            txPlan.qsoId, ui_get_vfo_freq() + ui_get_ft8_offset(), txPlan.normalizedMsg, txPlan.parity);
+
+    if (!ft8tx.requestTransmission(freq,
+                                   txPlan.normalizedMsg,
+                                   txPlan.msgType,
+                                   txPlan.parity,
+                                   txPlan.qsoId)) {
+        server.send(500, "application/json", "{\"error\":\"failed to queue tx request\"}");
+        return;
+    }
 
     // then log on the WEB UI
     //Serial.printf("[FT8] Send test at %d Hz: %s\n", freq, msg.c_str());
     char buf[128];
-    sprintf(buf,"{\"message\":\"[FT8] Send message at %d Hz: %s\"}", freq, msg.c_str());
+    sprintf(buf,"{\"message\":\"[FT8] Send message at %d Hz: %s\"}", freq, txPlan.normalizedMsg);
     server.send(200, "application/json", buf);
 }
 
@@ -398,11 +406,30 @@ void handleFt8Answer() {
             // <call1> IW5ALZ JN53
             String reply = String(q.call1) + " " + String(ui_get_mycall()) + " " + String(ui_get_mygrid()); 
 
+            uint32_t nowTsSec = (uint32_t)(utc_ms() / 1000ULL);
+            QSOManager::TxEnqueuePlan txPlan = qsoManager.prepareOutgoingTx(reply.c_str(), nowTsSec, myParity);
+            if (!txPlan.ok) {
+                const char* errorText = txPlan.error ? txPlan.error : "failed to prepare outgoing tx";
+                String resp = String("{\"error\":\"") + errorText + "\"}";
+                server.send(400, "application/json", resp);
+                return;
+            }
+
+            if (txPlan.qsoId != q.qso_id) {
+                server.send(409, "application/json", "{\"error\":\"qso mismatch while preparing tx\"}");
+                return;
+            }
 
             Serial.printf("Scheduling FT8 reply to QSO %d at %d Hz: %s theirParity=%d myParity=%d\r\n", 
             q.qso_id, ui_get_vfo_freq() + ui_get_ft8_offset(), reply.c_str(), theirParity, myParity);
-            ft8tx.requestTransmission(freq, reply.c_str(), MSG_CQ_GRID, myParity, q.qso_id);
-
+            if (!ft8tx.requestTransmission(freq,
+                                           txPlan.normalizedMsg,
+                                           txPlan.msgType,
+                                           txPlan.parity,
+                                           txPlan.qsoId)) {
+                server.send(500, "application/json", "{\"error\":\"failed to queue tx request\"}");
+                return;
+            }
             break;
         }
     }
@@ -414,6 +441,73 @@ void handleFt8Answer() {
 
     server.send(200, "application/json", "{\"status\":\"ok\"}");
 }
+
+//Call a specific callsign 
+void handleFt8Call() {
+    if (!server.hasArg("plain")) {
+        server.send(400, "application/json", "{\"error\":\"missing body\"}");
+        return;
+    }
+
+    String body = server.arg("plain");
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, body);
+
+    if (err) {
+        server.send(400, "application/json", "{\"error\":\"invalid json\"}");
+        return;
+    }
+
+    // get the qso from where to get call2 (the recipient of the call)
+    uint32_t qso_id = doc["qso_id"];
+    int freq = doc["freq"] | 0;
+   
+    bool found = false;
+
+    for (auto &q : qsoManager.qso_list) {
+        if (q.qso_id == qso_id) {
+            found = true;
+            // 👉 trigger your FT8 reply logic here
+            uint8_t theirParity = ((q.lastHeard / 15) % 2);
+            uint8_t myParity = (theirParity == 0) ? 1 : 0;
+
+            // make a local copy of the reply string like:
+            // <call2> IW5ALZ JN53
+            String reply = String(q.call2) + " " + String(ui_get_mycall()) + " " + String(ui_get_mygrid()); 
+
+            uint32_t nowTsSec = (uint32_t)(utc_ms() / 1000ULL);
+            QSOManager::TxEnqueuePlan txPlan = qsoManager.prepareOutgoingTx(reply.c_str(), nowTsSec, myParity);
+            if (!txPlan.ok) {
+                const char* errorText = txPlan.error ? txPlan.error : "failed to prepare outgoing tx";
+                String resp = String("{\"error\":\"") + errorText + "\"}";
+                server.send(400, "application/json", resp);
+                return;
+            }
+            // copy the grid of my new recipient            
+            strlcpy(qsoManager.getQsoById(txPlan.qsoId)->grid1, q.grid2, sizeof(qsoManager.getQsoById(txPlan.qsoId)->grid1) ); 
+            Serial.printf("Scheduling FT8 reply to QSO %d at %d Hz: %s theirParity=%d myParity=%d\r\n", 
+            q.qso_id, ui_get_vfo_freq() + ui_get_ft8_offset(), reply.c_str(), theirParity, myParity);
+            if (!ft8tx.requestTransmission(freq,
+                                           txPlan.normalizedMsg,
+                                           txPlan.msgType,
+                                           txPlan.parity,
+                                           txPlan.qsoId)) {
+                server.send(500, "application/json", "{\"error\":\"failed to queue tx request\"}");
+                return;
+            }
+            break;
+        }
+    }
+
+    if (!found) {
+        server.send(404, "application/json", "{\"error\":\"not found\"}");
+        return;
+    }
+
+    server.send(200, "application/json", "{\"status\":\"ok\"}");
+}
+
 
 void handleFt8Clear() {
     if (!server.hasArg("plain")) {
@@ -440,8 +534,8 @@ void handleFt8Clear() {
             q.is_mine = false;   // or q.isMine = false
             found = true;
 
-            // 👉 optionally stop transmission / clear state
-
+            // 👉 cancel also all the pending transmissions  
+            ft8tx.cancelJobsForQso(q.qso_id);
             break;
         }
     }
@@ -473,6 +567,21 @@ static void handleMemoryStats() {
 
     o["psram_total"] = ESP.getPsramSize();
     o["psram_free"]  = ESP.getFreePsram();
+
+    char buf[2048] = {0};
+#if defined(configGENERATE_RUN_TIME_STATS) && \
+    defined(configUSE_STATS_FORMATTING_FUNCTIONS) && \
+    defined(configUSE_TRACE_FACILITY) && \
+    (configGENERATE_RUN_TIME_STATS == 1) && \
+    (configUSE_STATS_FORMATTING_FUNCTIONS == 1) && \
+    (configUSE_TRACE_FACILITY == 1)
+    vTaskGetRunTimeStats(buf);
+#else
+    strlcpy(buf,
+            "Run-time task stats not available in this build (configUSE_TRACE_FACILITY/configUSE_STATS_FORMATTING_FUNCTIONS disabled in precompiled FreeRTOS libs).",
+            sizeof(buf));
+#endif
+    o["run_time_stats"] = buf;
 
     String out;
     serializeJson(doc, out);
@@ -510,6 +619,7 @@ static void startWebServer() {
     //server.on("/api/ft8/spots", HTTP_GET, handleFt8Spots);
     server.on("/api/ft8/answer", HTTP_POST, handleFt8Answer);
     server.on("/api/ft8/clear",  HTTP_POST, handleFt8Clear);
+    server.on("/api/ft8/call",   HTTP_POST, handleFt8Call);
 
     server.on("/api/ft8/qsos", HTTP_GET, []() {
       server.send(200, "application/json", qsoManager.getAllQSOsJson());

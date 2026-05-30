@@ -14,6 +14,23 @@
 
 class QSOManager {
 public:
+    struct TxEnqueuePlan {
+        bool ok = false;
+        Ft8MsgType msgType = MSG_UNKNOWN;
+        uint32_t qsoId = 0;
+        uint8_t parity = 255;
+        char normalizedMsg[40] = {0};
+        const char* error = nullptr;
+    };
+
+    struct TxPostResult {
+        bool ok = false;
+        uint32_t qsoId = 0;
+        QsoState qsoState = QSO_CQ;
+        bool qsoIdMatched = false;
+        const char* error = nullptr;
+    };
+
     QSOManager();
     void begin();
 
@@ -56,6 +73,8 @@ public:
     String getActiveQSOsJson();
     String getCompletedQSOsJson();
     Ft8MsgType parseMessage(const char *msg, Ft8Fields &out);
+    TxEnqueuePlan prepareOutgoingTx(const char* rawMsg, uint32_t nowTsSec, uint8_t requestedParity);
+    TxPostResult onTxCompleted(uint32_t expectedQsoId, const char* sentMsg, uint32_t txDoneTsSec, uint32_t txFreqHz);
 
 private:
     // Helpers
@@ -66,6 +85,7 @@ private:
 
     const char* extractFt8Message(const char* line);
     const char* stateToString(QsoState s);
+    void finalizeCompletedQso(QSO* q, uint32_t freq_hz, uint32_t timestampSec);
 
     
     String generateReply(Ft8MsgType type, const Ft8Fields &f, int snr_db, Ft8MsgType &output_type);

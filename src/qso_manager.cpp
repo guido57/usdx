@@ -456,6 +456,89 @@ Ft8MsgType QSOManager::parseMessage(const char *msg, Ft8Fields &out) {
     return out.type;
 }
 
+QSOManager::TxEnqueuePlan QSOManager::prepareOutgoingTx(const char* rawMsg, uint32_t nowTsSec, uint8_t requestedParity) {
+    TxEnqueuePlan plan{};
+
+    if (!rawMsg || rawMsg[0] == '\0') {
+        plan.error = "empty message";
+        return plan;
+    }
+
+    Ft8Fields fields{};
+    Ft8MsgType type = parseMessage(rawMsg, fields);
+    if (type == MSG_UNKNOWN) {
+        plan.error = "unrecognized message format";
+        return plan;
+    }
+
+    fields.ts = nowTsSec;
+    QSO* q = addOrUpdate(type, fields, nowTsSec, INT8_MIN);
+    if (!q) {
+        plan.error = "failed to create/update qso";
+        return plan;
+    }
+
+    plan.ok = true;
+    plan.msgType = type;
+    plan.qsoId = q->qso_id;
+    plan.parity = requestedParity;
+    strlcpy(plan.normalizedMsg, rawMsg, sizeof(plan.normalizedMsg));
+    return plan;
+}
+
+void QSOManager::finalizeCompletedQso(QSO* q, uint32_t freq_hz, uint32_t timestampSec) {
+    if (!q || q->state != QSO_DONE || q->counted_in_stats) {
+        return;
+    }
+
+    int band = freqToBand(freq_hz);
+    char bandname[5];
+    strcpy(bandname, BandNames[band]);
+    char mode[4] = "FT8";
+
+    if (strcmp(q->call1, ui_get_mycall()) == 0) {
+        qsoStats.onQSOCompleted(q->call2, freq_hz, timestampSec);
+        adif.enqueue(*q, freq_hz, bandname, mode);
+    } else if (strcmp(q->call2, ui_get_mycall()) == 0) {
+        qsoStats.onQSOCompleted(q->call1, freq_hz, timestampSec);
+        adif.enqueue(*q, freq_hz, bandname, mode);
+    }
+
+    q->counted_in_stats = true;
+}
+
+QSOManager::TxPostResult QSOManager::onTxCompleted(uint32_t expectedQsoId, const char* sentMsg, uint32_t txDoneTsSec, uint32_t txFreqHz) {
+    TxPostResult result{};
+
+    if (!sentMsg || sentMsg[0] == '\0') {
+        result.error = "empty tx message";
+        return result;
+    }
+
+    Ft8Fields fields{};
+    Ft8MsgType type = parseMessage(sentMsg, fields);
+    if (type == MSG_UNKNOWN) {
+        result.error = "unrecognized tx message format";
+        return result;
+    }
+
+    fields.ts = txDoneTsSec;
+    QSO* q = addOrUpdate(type, fields, txDoneTsSec, INT8_MIN);
+    if (!q) {
+        result.error = "failed to update qso after tx";
+        return result;
+    }
+
+    addLog(q, 'T', txDoneTsSec, q->state, sentMsg);
+    finalizeCompletedQso(q, txFreqHz, txDoneTsSec);
+
+    result.ok = true;
+    result.qsoId = q->qso_id;
+    result.qsoState = q->state;
+    result.qsoIdMatched = (expectedQsoId == (uint32_t)q->qso_id);
+    return result;
+}
+
 String QSOManager::generateReply(Ft8MsgType input_type, const Ft8Fields &f, int snr_db, Ft8MsgType & output_type) {
 
     String myCall = String(ui_get_mycall());
@@ -619,44 +702,28 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
         return;
     }  
     
-    // add this message to the QSO log if it is relevant to me (either a CQ or a message directed to me)
-    // Serial.println("Checking if message is relevant to me or its is a CQ, for logging: " + String(msg) + " call1=" + String(f.call1) + " call2=" + String(f.call2) + " type=" + String(type) + " QSO state is " + String(q->state));
-    if(strcmp(f.call1, ui_get_mycall()) == 0 || (f.hasCall2 && strcmp(f.call2, ui_get_mycall()) == 0)){
+    // if(strcmp(f.call1, ui_get_mycall()) == 0 || (f.hasCall2 && strcmp(f.call2, ui_get_mycall()) == 0)){
         
-        time_t timestamp;
-        time(&timestamp);
+    //     time_t timestamp;
+    //     time(&timestamp);
     
-        // Serial.printf("Adding log entry to qso_id: %d for message involving me: %s call1=%s call2=%s type=%d QSO state is %d. Generated reply: %s\r\n", q->qso_id, msg, f.call1, f.call2, type, q->state, reply.c_str());
-        addLog(q, 'R', timestamp, q->state, msg);
+    //     // Serial.printf("Adding log entry to qso_id: %d for message involving me: %s call1=%s call2=%s type=%d QSO state is %d. Generated reply: %s\r\n", q->qso_id, msg, f.call1, f.call2, type, q->state, reply.c_str());
+    //     addLog(q, 'R', timestamp, q->state, msg);
         
-    }else if(type <= MSG_CQ_TEST){
+    // }else 
+    //if(type <= MSG_CQ_TEST){
         
-        time_t timestamp;
-        time(&timestamp);
-    
-        // Serial.printf("Adding log entry to qso_id: %d for CQ message: %s call1=%s call2=%s type=%d QSO state is %d.\r\n", q->qso_id, msg, f.call1, f.call2, type, q->state);
-        addLog(q, 'R', timestamp, q->state, msg);
-    }
-    
-    // manage QSO_END
-    if (q->state == QSO_DONE){
-        if (!q->counted_in_stats) {
-            int band = freqToBand(s.freq_hz);
-            char bandname[5];
-            strcpy(bandname, BandNames[band]);
-            char mode[4] = "FT8";
-            if(strcmp(q->call1, ui_get_mycall()) == 0) {
-                qsoStats.onQSOCompleted(q->call2, s.freq_hz, f.ts);
-                adif.enqueue(*q, s.freq_hz, bandname, mode);
-            } else if (strcmp(q->call2, ui_get_mycall()) == 0) {
-                qsoStats.onQSOCompleted(q->call1, s.freq_hz, f.ts);
-                adif.enqueue(*q, s.freq_hz, bandname, mode);
-            }
-            q->counted_in_stats = true;
-        }    
-    }    
+    // always log CQ messages even if not directed to me
+    //time_t timestamp;
+    time(&timestamp);
 
-    // if the message is directed to me
+    // Serial.printf("Adding log entry to qso_id: %d for CQ message: %s call1=%s call2=%s type=%d QSO state is %d.\r\n", q->qso_id, msg, f.call1, f.call2, type, q->state);
+    addLog(q, 'R', timestamp, q->state, msg);
+    //}
+    
+    finalizeCompletedQso(q, s.freq_hz, f.ts);
+
+    // if the message is directed to me manage the reply scheduling (only for messages directed to me or CQ messages, ignore messages not relevant to me for replying, but still log them if they are CQ or directed to me)
     if(strcmp(f.call1, ui_get_mycall()) == 0) {
 
         Serial.println("with msg " + String(msg) + " I decoded f.call1=" + String(f.call1) + " f.call2=" + String(f.call2) + " message type " + String(type) + " QSO state is " + String(q->state) + ". Generated reply: " + reply + " reply type: " + String(reply_type) );

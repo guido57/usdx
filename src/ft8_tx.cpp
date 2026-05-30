@@ -358,16 +358,28 @@ void FT8_TX::taskLoop() {
             time_t timestamp;
             time(&timestamp);
 
-            Ft8Fields f;
-            Ft8MsgType type = qsoManager.parseMessage(best->message, f);
-            QSO *q = qsoManager.addOrUpdate(type, f, timestamp, 127); // Update QSO state based on the message we just sent (SNR is not relevant for sent messages, so we pass 0)
-            if(q->qso_id != best->qso_id) {
-                Serial.printf("[FT8] Warning: QSO ID mismatch after addOrUpdate. Expected %d, got %d\n", best->qso_id, q->qso_id);
+            QSOManager::TxPostResult txResult = qsoManager.onTxCompleted(
+                best->qso_id,
+                best->message,
+                (uint32_t)timestamp,
+                best->baseFreq);
+
+            if (!txResult.ok) {
+                Serial.printf("[FT8] post-TX update failed for job %u: %s\n",
+                              best->id,
+                              txResult.error ? txResult.error : "unknown error");
+                best->cancelled = true;
+                continue;
             }
-            qsoManager.addLog(q, 'T', timestamp, q->state, best->message);
+
+            if (!txResult.qsoIdMatched) {
+                Serial.printf("[FT8] Warning: QSO ID mismatch after TX. Expected %u, got %u\n",
+                              best->qso_id,
+                              txResult.qsoId);
+            }
 
             // Retry logic
-            if (q->state == QSO_DONE) {
+            if (txResult.qsoState == QSO_DONE) {
 
                 best->cancelled = true;
 
