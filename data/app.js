@@ -984,6 +984,7 @@ function formatDate(ts) {
 const qsosTableBody = document.querySelector('#ft8-qsos tbody');
 
 qsosTableBody.addEventListener('dblclick', async (event) => {
+    // double click on a QSO row to answer a CQ, clear thr QSO or call the call2
     const tr = event.target.closest('tr');
     if (!tr) return;
 
@@ -1000,7 +1001,12 @@ qsosTableBody.addEventListener('dblclick', async (event) => {
     //     return
     // }    
     
-    const url = isMine ? '/api/ft8/clear' : '/api/ft8/answer';
+    let url = ''; // isMine ? '/api/ft8/clear' : '/api/ft8/answer';
+    if(isMine)  url = '/api/ft8/clear';
+    else if(qso.state === 'CQ') 
+      url = '/api/ft8/answer';
+    else  // we want to call the call2 of the current QSO, if it's not a CQ
+      url = '/api/ft8/call';
 
     try {
         const response = await fetch(url, {
@@ -1053,71 +1059,90 @@ function showQsoLog(qsoId) {
     logEl.scrollTop = logEl.scrollHeight;
 }
 
-function getLastTx(qso) {
-  if (!qso.log) return null;
-
-  let best = null;
-
-  for (const l of qso.log) {
-    if (!l.rtx) continue;                 // only TX
-    if (l.msg.startsWith("CQ ")) continue; // ignore CQ
-
-    if (!best || l.ts > best.ts) {
-      best = l;
-    }
-  }
-
-  if (!best) return null;
-
-  return {
-    time: formatTime(best.ts),
-    msg: simplifyMsg(best.msg)
-  };
-}
-
-function getNextTx(qso) {
-  if (!qso.tx_queue || qso.tx_queue.length === 0) return null;
-
-  // take earliest (or just first if already ordered)
-  let next = qso.tx_queue[0];
-
-  for (const t of qso.tx_queue) {
-    if (t.ts < next.ts) next = t;
-  }
-
-  return {
-    time: formatTime(next.ts * 15), // convert slot number to seconds (15s slots)
-    msg: simplifyMsg(next.msg),
-    retries: next.retries ?? qso.retryCount ?? 0
-  };
-}
-
 function formatTime(ts) {
   const d = new Date(ts * 1000);
   return d.toISOString().substr(11, 8);
 }
 
-function simplifyMsg(msg) {
-  msg = msg.trim();
-  const parts = msg.split(" ");
-  return parts[parts.length - 1]; // only "-08", "RR73", etc.
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function getQsoMessageHistory(qso) {
+  const history = [];
+
+  if (Array.isArray(qso.log)) {
+    for (const entry of qso.log) {
+      history.push({
+        kind: entry.rtx === 84 ? 'tx' : (entry.rtx === 82 ? 'rx' : 'other'),
+        time: formatTime(entry.ts),
+        msg: entry.msg || ''
+      });
+    }
+  }
+
+  if (Array.isArray(qso.tx_queue)) {
+    const queued = [...qso.tx_queue].sort((left, right) => left.ts - right.ts);
+    for (const entry of queued) {
+      history.push({
+        kind: entry.transmitting === true ? 'onair' : 'queued',
+        time: formatTime(entry.ts * 15),
+        msg: entry.msg || ''
+      });
+    }
+  }
+
+  return history;
 }
 
 function renderTxCell(qso) {
-  const last = getLastTx(qso);
-  const next = getNextTx(qso);
+  const history = getQsoMessageHistory(qso);
+  if (history.length === 0) return '';
 
-  let html = "";
+  return history.map(entry => {
+    let color = '#666';
+    let prefix = '•';
 
-  if (next) {
-    html += `<div style="color:#aa8800">⏳ ${next.time} ${next.msg}</div>`;
+    if (entry.kind === 'queued') {
+      color = '#aa8800';
+      prefix = '⏳';
+    } else if (entry.kind === 'onair') {
+      color = '#cc0000';
+      prefix = '●';
+    } else if (entry.kind === 'tx') {
+      color = '#008800';
+      prefix = 'TX';
+    } else if (entry.kind === 'rx') {
+      color = '#0055aa';
+      prefix = 'RX';
+    }
+
+    return `<div style="color:${color}; white-space:nowrap; font-size:11px; line-height:1.25">${prefix} ${escapeHtml(entry.time)} ${escapeHtml(entry.msg)}</div>`;
+  }).join('');
+}
+
+function formatQsoState(state) {
+  switch (state) {
+    case 'CQ':
+      return '📢';
+    case 'CALLING':
+      return '📞';
+    case 'REPORT_RECEIVED':
+    case 'REPORT_RCVD':
+      return '📥';
+    case 'REPORT_EXCHANGED':
+      return '🔄';
+    case 'QSO_DONE':
+    case 'DONE':
+      return '✅';
+    default:
+      return state || '';
   }
-
-  if (last) {
-    html += `<div style="color:#008800">✔ ${last.time} ${last.msg}</div>`;
-  }
-
-  return html;
 }
 
 function isTransmitting(qso) {
@@ -1174,7 +1199,7 @@ function addQsoRow(qso){
       <td>${qso.snr2 === -128 ? '' : qso.snr2}</td>
       <td>${qso.report2 || ''}</td>
       <td>${qso.score2 || ''}</td>
-      <td>${qso.state === 'DONE' ? '✅' : qso.state}</td>
+      <td>${formatQsoState(qso.state)}</td>
       <td>${renderTxCell(qso)}</td>
       <td>${durationStr}</td>
       <td>${qso.cared || ''}</td>
