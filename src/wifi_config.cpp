@@ -568,20 +568,6 @@ static void handleMemoryStats() {
     o["psram_total"] = ESP.getPsramSize();
     o["psram_free"]  = ESP.getFreePsram();
 
-    char buf[2048] = {0};
-#if defined(configGENERATE_RUN_TIME_STATS) && \
-    defined(configUSE_STATS_FORMATTING_FUNCTIONS) && \
-    defined(configUSE_TRACE_FACILITY) && \
-    (configGENERATE_RUN_TIME_STATS == 1) && \
-    (configUSE_STATS_FORMATTING_FUNCTIONS == 1) && \
-    (configUSE_TRACE_FACILITY == 1)
-    vTaskGetRunTimeStats(buf);
-#else
-    strlcpy(buf,
-            "Run-time task stats not available in this build (configUSE_TRACE_FACILITY/configUSE_STATS_FORMATTING_FUNCTIONS disabled in precompiled FreeRTOS libs).",
-            sizeof(buf));
-#endif
-    o["run_time_stats"] = buf;
 
     String out;
     serializeJson(doc, out);

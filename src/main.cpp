@@ -53,20 +53,6 @@ static DemodMode ui_mode_to_demod_mode(UiMode mode) {
   }
 }
 
-// ===============================
-// FT8 Decoder Buffer
-// ===============================
-// #define FT8_DECODER_BUFFER_SIZE 256
-// static int16_t ft8_sample_buffer[FT8_DECODER_BUFFER_SIZE];
-// static uint16_t ft8_sample_idx = 0;
-
-// static void ft8_decoder_add_sample(int16_t sample) {
-//     ft8_sample_buffer[ft8_sample_idx++] = sample;
-//     if (ft8_sample_idx >= FT8_DECODER_BUFFER_SIZE) {
-//         ft8_decoder_add_samples(ft8_sample_buffer, FT8_DECODER_BUFFER_SIZE);
-//         ft8_sample_idx = 0;
-//     }
-// }
 
 // ===============================
 // SDR Voice AGC
@@ -126,7 +112,6 @@ static int16_t peakQDec = 0;
 static int16_t peakAudio = 0;
 static int16_t peakWebAudio = 0;
 static int16_t peakAudioOut = 0;
-
 static uint32_t peakLastMs = 0;
 
 static inline int16_t fastAbs16(int16_t v) {
