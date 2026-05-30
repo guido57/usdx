@@ -38,9 +38,12 @@ String Adif::epochToDate(uint32_t t)
 {
     time_t raw = t;
     struct tm* ti = gmtime(&raw);
+    if (ti == nullptr) {
+        return String("19700101");
+    }
 
-    char buf[9];
-    sprintf(buf, "%04d%02d%02d",
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%04d%02d%02d",
         ti->tm_year + 1900,
         ti->tm_mon + 1,
         ti->tm_mday);
@@ -52,9 +55,12 @@ String Adif::epochToTime(uint32_t t)
 {
     time_t raw = t;
     struct tm* ti = gmtime(&raw);
+    if (ti == nullptr) {
+        return String("000000");
+    }
 
-    char buf[7];
-    sprintf(buf, "%02d%02d%02d",
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%02d%02d%02d",
         ti->tm_hour,
         ti->tm_min,
         ti->tm_sec);
