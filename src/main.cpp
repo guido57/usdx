@@ -53,6 +53,26 @@ static DemodMode ui_mode_to_demod_mode(UiMode mode) {
   }
 }
 
+// ===============================
+// tasks profiler
+// ===============================
+
+#include "task_profilers.h" 
+
+TaskProfiler profilers[] = {
+    { "NetworkTask", 0, 0, 0 },
+    { "FT8Consumer", 0, 0, 0 },
+    { "FT8Finalizer", 0, 0, 0 },
+    { "FT8TX", 0, 0, 0 },
+    { "AudioI2S", 1, 0, 0 },
+    { "i2sReadTask", 1, 0, 0 },
+    { "flashSaveTask", 0, 0, 0 }
+
+    
+};
+
+size_t profilerCount  =
+    sizeof(profilers) / sizeof(profilers[0]);
 
 // ===============================
 // SDR Voice AGC

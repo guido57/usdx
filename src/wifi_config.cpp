@@ -22,6 +22,7 @@
 #include "ft8_freq_opt.h"
 #include "qsostats.h"
 #include "adif.h"
+#include "task_profilers.h"
 
 extern FT8_TX ft8tx; // declared in main.cpp
 extern FT8FreqOptimizer ft8FreqOptimizer; // declared in main.cpp
@@ -568,6 +569,32 @@ static void handleMemoryStats() {
     o["psram_total"] = ESP.getPsramSize();
     o["psram_free"]  = ESP.getFreePsram();
 
+    // Add task profiler stats
+    static uint64_t last = esp_timer_get_time();
+    uint64_t now = esp_timer_get_time();
+    double interval_us = now - last; // elapsed time since last call in microseconds
+    last = now;
+    double coreLoad[2] = {0, 0};
+    String taskProfStr = "[";
+    for (int i=0; i<profilerCount; i++)
+    {
+        TaskProfiler& p = profilers[i];
+        uint64_t delta_busy = p.busy_us - p.last_busy_us;
+        p.last_busy_us = p.busy_us;
+
+        int16_t pct =
+            100.0 * delta_busy / interval_us;
+
+        taskProfStr += String("{\"name\":") + p.name + 
+                       String(",\"core\":") + p.core + 
+                       String(",\"cpu_perc\":") + pct +  
+                       String(",\"loops\":") + p.loops + 
+                       String(",\"busy_us\":") + delta_busy + "}";
+        if (i < profilerCount - 1) taskProfStr += ",";    
+        p.loops = 0;
+    }
+    taskProfStr += "]";
+    o["task_profilers"] = taskProfStr;
 
     String out;
     serializeJson(doc, out);
@@ -792,13 +819,17 @@ void NetworkTask(void* pvParameters) {
     }else
         Serial.printf("mDNS started: %s.local\n", ui_get_ws_server_host());
 
+
+    auto* p = static_cast<TaskProfiler*>(pvParameters);
+   
     // Start WebSocket server
     startWebSocketServer();
 
     // ---- Main loop ----
     for(;;) {
-
-        // ---- HTTP server ----
+       uint64_t t0 = esp_timer_get_time();
+        
+         // ---- HTTP server ----
         if (webServerStarted)
             server.handleClient();
 
@@ -841,8 +872,6 @@ void NetworkTask(void* pvParameters) {
 
             ethConnected = true;
         }
-
-        vTaskDelay(pdMS_TO_TICKS(2));
 
         // ---- Send audio to websocket ----
         AudioFrame* framePtr;
@@ -934,6 +963,13 @@ void NetworkTask(void* pvParameters) {
         } else {
             g_ft8ServerActive = false;
         }
+    
+        // profiling
+        p->busy_us += esp_timer_get_time() - t0;
+        p->loops++;
+
+
+        vTaskDelay(pdMS_TO_TICKS(2));
     }
 }
 
@@ -1187,7 +1223,7 @@ void wifi_config_setup() {
     if(ft8Queue == NULL) ft8Queue = xQueueCreate(8,  MAX_FT8_MSG);
 
     Serial.printf("Start network task on Core 0\n");
-    xTaskCreatePinnedToCore(NetworkTask, "NET", 36000, NULL, 3, NULL, 0); 
+    xTaskCreatePinnedToCore(NetworkTask, "NET", 36000, &profilers[0], 3, NULL, 0); 
 }
 
 // ===== Audio Push =====
