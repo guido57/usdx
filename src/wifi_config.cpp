@@ -28,6 +28,7 @@ extern FT8_TX ft8tx; // declared in main.cpp
 extern FT8FreqOptimizer ft8FreqOptimizer; // declared in main.cpp
 extern QSOStats qsoStats; // declared in main.cpp 
 extern std::vector<FT8_TX::TxJob> txJobs; // declared in ft8_tx.cpp
+extern QueueHandle_t profilerMutex;
 
 static WebServer server(80);
 static WebSocketsServer wsServer(8765);  // Default port; will be updated from UI settings
@@ -574,28 +575,32 @@ static void handleMemoryStats() {
     uint64_t now = esp_timer_get_time();
     double interval_us = now - last; // elapsed time since last call in microseconds
     last = now;
-    double coreLoad[2] = {0, 0};
-    String taskProfStr = "[";
+    
+    JsonArray arr = o["task_profilers"].to<JsonArray>();
+    
     for (int i=0; i<profilerCount; i++)
     {
         TaskProfiler& p = profilers[i];
-        uint64_t delta_busy = p.busy_us - p.last_busy_us;
-        p.last_busy_us = p.busy_us;
+        
+        xSemaphoreTake(profilerMutex, portMAX_DELAY);
+        uint64_t busy = p.busy_us;
+        uint32_t loops = p.loops;
+        p.busy_us = 0;
+        p.loops = 0;
+        xSemaphoreGive(profilerMutex);
 
         int16_t pct =
-            100.0 * delta_busy / interval_us;
+            100.0 * busy / interval_us;
 
-        taskProfStr += String("{\"name\":") + p.name + 
-                       String(",\"core\":") + p.core + 
-                       String(",\"cpu_perc\":") + pct +  
-                       String(",\"loops\":") + p.loops + 
-                       String(",\"busy_us\":") + delta_busy + "}";
-        if (i < profilerCount - 1) taskProfStr += ",";    
-        p.loops = 0;
+        JsonObject obj = arr.add<JsonObject>();
+        obj["name"] = p.name;
+        obj["core"] = p.core;
+        obj["cpu_perc"] = pct;
+        obj["loops"] = loops;
+        obj["busy_us"] = busy;
+        obj["busy_avg_us"] = loops ? busy / loops : 0;
     }
-    taskProfStr += "]";
-    o["task_profilers"] = taskProfStr;
-
+    
     String out;
     serializeJson(doc, out);
     server.send(200, "application/json", out);

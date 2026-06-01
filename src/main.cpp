@@ -61,14 +61,9 @@ static DemodMode ui_mode_to_demod_mode(UiMode mode) {
 
 TaskProfiler profilers[] = {
     { "NetworkTask", 0, 0, 0 },
-    { "FT8Consumer", 0, 0, 0 },
-    { "FT8Finalizer", 0, 0, 0 },
-    { "FT8TX", 0, 0, 0 },
-    { "AudioI2S", 1, 0, 0 },
-    { "i2sReadTask", 1, 0, 0 },
-    { "flashSaveTask", 0, 0, 0 }
-
-    
+    { "UI", 1, 0, 0 },
+    { "DSP", 1, 0, 0 },
+    { "loop", 1, 0, 0 },
 };
 
 size_t profilerCount  =
@@ -623,7 +618,14 @@ time_t makeTimestamp(int year,
     return mktime(&t);
 }
 
+auto* p_ui = &profilers[1]; // for easy access in the loop for profiling
+auto* p_dsp = &profilers[2]; // for easy access in the loop for profiling
+auto* p_loop = &profilers[3]; // for easy access in the loop for profiling
+QueueHandle_t profilerMutex = xSemaphoreCreateMutex();
+  
 void loop() {
+
+  uint64_t t0 = esp_timer_get_time(); // profiler start time 
 
   static uint32_t lastReport = 0;
   static uint32_t loopCount = 0;
@@ -631,6 +633,7 @@ void loop() {
   // timing accumulators
   static uint32_t uiTimeTotal = 0;
   static uint32_t audioTimeTotal = 0;
+  static uint32_t loopTimeTotal = 0;
   static uint32_t cycles = 0;
 
   loopCount++;
@@ -658,35 +661,22 @@ void loop() {
     return;
   }
 
-  uint32_t start;
+  uint64_t start;
 
   // ---------------- UI ----------------
-  start = micros();
+  start = esp_timer_get_time();
   ui_loop();
-  uiTimeTotal += micros() - start;
-
+  // xSemaphoreTake(profilerMutex, portMAX_DELAY);
+  p_ui->busy_us += esp_timer_get_time() - start; // update profiler busy time
+  p_ui->loops++;
+  // xSemaphoreGive(profilerMutex);
   // ------------- Audio ---------------
-  start = micros();
+  start = esp_timer_get_time();
   processAudioPCM1808();
-  // processAudioPCM1808_simulatedIQ();
-  audioTimeTotal += micros() - start;
-
-  // ------------- FT8 Decoder ---------------
-  // Process decoder periodically (check for completed slots)
-  static uint32_t lastDecoderCheck = 0;
-  uint32_t now = millis();
-  if (now - lastDecoderCheck >= 100) {  // Check every 100ms
-    // if (ft8_decoder_process()) {
-    //   // Decoder found messages in this slot
-    //   const ft8_decoded_msg_t* msg = ft8_decoder_get_last_message();
-    //   if (msg && msg->valid) {
-    //     Serial.printf("[FT8] SNR:%.1f dB  Freq:%.1f Hz  Message: %s\n", 
-    //                   msg->snr, msg->freq, msg->message);
-    //   }
-    // }
-    lastDecoderCheck = now;
-  }
-
+  // xSemaphoreTake(profilerMutex, portMAX_DELAY);
+  p_dsp->busy_us += esp_timer_get_time() - start; // update profiler busy time
+  p_dsp->loops++;
+  // xSemaphoreGive(profilerMutex);
   cycles++;
 
   // ----------- Synth control ----------
@@ -748,4 +738,34 @@ void loop() {
   
   }
   qsoStats.periodicSave(millis());
+
+  // xSemaphoreTake(profilerMutex, portMAX_DELAY);
+  p_loop->busy_us += esp_timer_get_time() - t0; // update loop profiler busy time 
+  p_loop->loops++;
+  // xSemaphoreGive(profilerMutex);
+
+
+  static unsigned long lastStatPrint = 0;
+  // if(millis() - lastStatPrint > 10000) {
+  //   Serial.printf("p_ui->busy_us=%lu p_dsp->busy_us=%lu p_loop->busy_us=%lu\n", 
+  //     p_ui->busy_us, p_dsp->busy_us, p_loop->busy_us);
+  //   Serial.printf("p_ui->loops=%lu p_dsp->loops=%lu p_loop->loops=%lu\n", 
+  //     p_ui->loops, p_dsp->loops, p_loop->loops);
+  //   Serial.printf("UI avg: %.2f us | DSP avg: %.2f us | Loop avg: %.2f us\n", 
+  //     p_ui->loops ? (float)p_ui->busy_us / p_ui->loops : 0,
+  //     p_dsp->loops ? (float)p_dsp->busy_us / p_dsp->loops : 0,
+  //     p_loop->loops ? (float)p_loop->busy_us / p_loop->loops : 0);    
+  //   p_ui->busy_us = 0;
+  //   p_dsp->busy_us = 0;
+  //   p_loop->busy_us = 0;  
+  //   p_ui->loops = 0;
+  //   p_dsp->loops = 0;
+  //   p_loop->loops = 0;
+  //   lastStatPrint = millis();
+  // }
+
+
+
+
 }
+
