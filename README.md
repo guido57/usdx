@@ -4,7 +4,7 @@ Its hardware is here https://hackaday.io/project/205224-esp32-hf-qrp-ft8-transce
 
 # ESP32 SDR Receiver / FT8 Transceiver
 
-This project implements a full **IQ SDR receiver** and **FT8 transceiver** on an ESP32 using external RF front-end circuitry. It includes DSP processing, audio output via I2S, network audio streaming, and automatic antenna band filtering.  
+This project implements a full **IQ SDR receiver** and **FT8 transceiver** on an ESP32 using external RF front-end circuitry. It includes DSP processing, **FT8 embedded coding and decoding**, audio output via I2S, network audio streaming, and automatic antenna band filtering.  
 
 ---
 
@@ -20,6 +20,7 @@ This project implements a full **IQ SDR receiver** and **FT8 transceiver** on an
 - **Web Server** for remote operations over Wi-Fi or Ethernet
 - Automatic **antenna filter selection** via MCP23017 GPIO
 - **FT8 TX and RX support** with frequency optimization
+- **FT8 embedded coding and decoding** using my library [](https://github.com/guido57/ESP32_ft8_lib) 
 
 ---
 
