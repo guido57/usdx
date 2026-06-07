@@ -3,14 +3,21 @@
 #include "qsostats.h"
 #include "adif.h"
 #include "pskreporter.h"
+#include <time.h>
 extern FT8FreqOptimizer ft8FreqOptimizer; // declared in main.cpp
 extern std::vector<FT8_TX::TxJob> txJobs; // declared in ft8_tx.cpp
 extern QSOStats qsoStats; // declared in wifi_config.cpp 
 extern FT8_TX ft8tx;      // declared in main.cpp
 extern Adif adif;   // declared in main.cpp, used here to submit completed QSOs to QRZ.com
-QSOManager::QSOManager() {}
+QSOManager::QSOManager() {
+    qsoMutex = xSemaphoreCreateMutex();
+}
 
 void QSOManager::begin() {
+
+    if (qsoMutex == nullptr) {
+        qsoMutex = xSemaphoreCreateMutex();
+    }
 
     Serial.printf("\n=== Memory Status before qso_list.reserve ===\n");
     Serial.printf("Total heap: %u bytes\n", ESP.getHeapSize());
@@ -30,6 +37,18 @@ void QSOManager::begin() {
 // ------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------
+void QSOManager::lockQsoList() {
+    if (qsoMutex) {
+        xSemaphoreTake(qsoMutex, portMAX_DELAY);
+    }
+}
+
+void QSOManager::unlockQsoList() {
+    if (qsoMutex) {
+        xSemaphoreGive(qsoMutex);
+    }
+}
+
 void QSOManager::safeCopy(char* dst, const char* src, size_t size) {
     if (!dst || !src || size == 0) return;
     strncpy(dst, src, size - 1);
@@ -102,10 +121,15 @@ const char* QSOManager::stateToString(QsoState s) {
 // ------------------------------------------------------------
 
 String QSOManager::getActiveQSOsJson() {
+    std::vector<QSO> snapshot;
+    lockQsoList();
+    snapshot = qso_list;
+    unlockQsoList();
+
     JsonDocument doc;
     JsonArray arr = doc.to<JsonArray>();
 
-    for (const auto &q : qso_list) {
+    for (const auto &q : snapshot) {
         if (q.state == QSO_DONE) continue;
 
         JsonObject o = arr.add<JsonObject>();
@@ -121,10 +145,15 @@ String QSOManager::getActiveQSOsJson() {
 }
 
 String QSOManager::getCompletedQSOsJson() {
+    std::vector<QSO> snapshot;
+    lockQsoList();
+    snapshot = qso_list;
+    unlockQsoList();
+
     JsonDocument doc;
     JsonArray arr = doc.to<JsonArray>();
 
-    for (const auto &q : qso_list) {
+    for (const auto &q : snapshot) {
         if (q.state != QSO_DONE) continue;
 
         JsonObject o = arr.add<JsonObject>();
@@ -139,15 +168,32 @@ String QSOManager::getCompletedQSOsJson() {
 }
 
 String QSOManager::getAllQSOsJson() {
-    JsonDocument doc;
-    JsonArray arr = doc.to<JsonArray>();
+    // Keep the payload below 64 KiB to avoid transport/library edge cases on embedded stacks.
+    static constexpr size_t JSON_SOFT_LIMIT = 60U * 1024U;
 
-    unsigned long start = millis();
+    std::vector<QSO> snapshot;
+    lockQsoList();
+    snapshot = qso_list;
+    unlockQsoList();
+
     unsigned long scoreCQtotalMicros = 0UL;
     unsigned long scoreTotalLogUs = 0UL;
     uint32_t vfo_freq = ui_get_vfo_freq();
-    for (const auto &q : qso_list) {
-        JsonObject o = arr.add<JsonObject>();
+    uint32_t now_epoch = (uint32_t)time(nullptr);
+
+    String out;
+    out.reserve(8192);
+    out += "[";
+
+    bool first = true;
+    size_t serializedCount = 0;
+
+    // Serialize latest QSOs first and stop before payload becomes too large.
+    for (auto it = snapshot.rbegin(); it != snapshot.rend(); ++it) {
+        QSO &q = *it;
+
+        JsonDocument qdoc;
+        JsonObject o = qdoc.to<JsonObject>();
 
         o["call1"] = q.call1;
         o["call2"] = q.call2;
@@ -155,81 +201,248 @@ String QSOManager::getAllQSOsJson() {
         o["grid2"] = q.grid2;
         o["snr1"]  = q.snr1;
         o["snr2"]  = q.snr2;
-        unsigned long start = micros();
-        o["score1"] = qsoStats.scoreCQ(q.dxcc1, q.snr1, vfo_freq);
-        o["score2"] = strcmp(q.call2,"") == 0 ? 0 : qsoStats.scoreCQ(q.dxcc2, q.snr2, vfo_freq);
-        scoreCQtotalMicros += micros() - start;
-        
+
+        unsigned long scoreStart = micros();
+        q.score1 = qsoStats.scoreCQ(q.call1, q.grid1, q.dxcc1, q.snr1, vfo_freq, now_epoch);
+        o["score1"] = q.score1;
+        q.score2 = strcmp(q.call2,"") == 0 ? 0 : qsoStats.scoreCQ(q.call2, q.grid2, q.dxcc2, q.snr2, vfo_freq, now_epoch);
+        o["score2"] = q.score2;
+        scoreCQtotalMicros += micros() - scoreStart;
+
         o["report1"] = q.report1;
         o["report2"] = q.report2;
         o["cq"] = q.cq;
-
         o["firstSeen"] = q.firstSeen;
         o["lastHeard"] = q.lastHeard;
         o["duration"] = (q.lastHeard > q.firstSeen) ? (q.lastHeard - q.firstSeen) : 0;
-
         o["state"] = stateToString(q.state);
         o["completed"] = (q.state == QSO_DONE);
-
-        // o["reply"] = q.reply;
         o["cared"] = q.cared;
-
         o["isMine"] = q.is_mine;
         o["qso_id"] = q.qso_id;
-        // ------------------------------------------------------------
-        // LOG (debug history)
-        // ------------------------------------------------------------
+
         unsigned long logStart = micros();
         JsonArray logArr = o["log"].to<JsonArray>();
-
         for (uint8_t i = 0; i < q.logCount; i++) {
             JsonObject le = logArr.add<JsonObject>();
-
             le["ts"] = q.log[i].timestamp;
             le["state"] = stateToString(q.log[i].state);
             le["msg"] = q.log[i].msg;
             le["rtx"] = q.log[i].rtx;
-            // vTaskDelay(1); // yield to avoid watchdog on long lists
         }
         scoreTotalLogUs += micros() - logStart;
-        // ------------------------------------------------------------
-        // QUEUE (TX messages to be transmitted for this QSO, including retries)
-        // ------------------------------------------------------------
-        JsonArray queueArr = o["tx_queue"].to<JsonArray>();
 
-        for (FT8_TX::TxJob t : txJobs) {
-
-            if(t.qso_id != q.qso_id || t.cancelled) continue;
-            
-            JsonObject te = queueArr.add<JsonObject>();
-
-            te["ts"] = t.targetSlot;
-            te["msg"] = t.message;
-            te["retries"] = t.retryCount;
-            te["transmitting"] = t.transmitting;
-            // vTaskDelay(1); // yield to avoid watchdog on long lists
-        }
+        // send jobs only for the QSO having pending jobs
+        if(ft8tx.getNextPendingJob(q.qso_id)) {
+            JsonArray queueArr = o["tx_queue"].to<JsonArray>();
+            for (FT8_TX::TxJob t : txJobs) {
+                if (t.qso_id != q.qso_id || t.cancelled) continue;
+                JsonObject te = queueArr.add<JsonObject>();
+                te["ts"] = t.targetSlot;
+                te["msg"] = t.message;
+                te["retries"] = t.retryCount;
+                te["transmitting"] = t.transmitting;
+            }
+       }    
 
         uint8_t retries = ft8tx.getRetriesforQso(q.qso_id);
-        if(retries > 0){
+        if (retries > 0) {
             o["retryCount"] = retries;
-            
         } else {
             o["nextRetry"] = nullptr;
             o["retryCount"] = 0;
             o["retryMessage"] = "";
         }
-        //vTaskDelay(1); // yield to avoid watchdog on long lists
+
+        const size_t expectedLen = measureJson(qdoc);
+        String item;
+        size_t serializedLen = serializeJson(qdoc, item);
+        const bool itemLooksComplete = (item.length() > 0 && item[item.length() - 1] == '}');
+        if (qdoc.overflowed() || serializedLen == 0 || item.length() == 0 || serializedLen != expectedLen || !itemLooksComplete) {
+            Serial.printf(
+            "getAllQSOsJson: stopping at qso_id=%d because item serialization failed (overflow=%d, expected=%u, bytes=%u, free_heap=%u, free_psram=%u)\n",
+                q.qso_id,
+                qdoc.overflowed() ? 1 : 0,
+            (unsigned)expectedLen,
+                (unsigned)serializedLen,
+                (unsigned)ESP.getFreeHeap(),
+                (unsigned)ESP.getFreePsram());
+            break;
+        }
+
+        size_t extra = item.length() + (first ? 0U : 1U) + 1U; // comma + closing ']'
+        if (out.length() + extra > JSON_SOFT_LIMIT) {
+            break;
+        }
+
+        if (!first) out += ",";
+        out += item;
+        first = false;
+        serializedCount++;
     }
 
-    String out;
-    out.reserve(qso_list.size() * 200);
-    serializeJson(doc, out);
+    out += "]";
 
-    // Serial.printf("Serialized %d QSOs to JSON in %lu ms\r\n", qso_list.size(), millis() - start);   
-    // Serial.printf("Total scoreCQ computation time: %lu microseconds\r\n", scoreCQtotalMicros );
-    // Serial.printf("Total log processing time: %lu microseconds\r\n", scoreTotalLogUs );
+    if (serializedCount < snapshot.size()) {
+        Serial.printf("getAllQSOsJson: truncated output to %u/%u QSOs to keep JSON under %u bytes\n",
+                      (unsigned)serializedCount,
+                      (unsigned)snapshot.size(),
+                      (unsigned)JSON_SOFT_LIMIT);
+    }
+
+    // Serial.printf("Total scoreCQ computation time: %lu microseconds\r\n", scoreCQtotalMicros);
+    // Serial.printf("Total log processing time: %lu microseconds\r\n", scoreTotalLogUs);
     return out;
+}
+
+void QSOManager::streamAllQSOsJson(WebServer &server) {
+    std::vector<QSO> snapshot;
+    lockQsoList();
+    snapshot = qso_list;
+    unlockQsoList();
+
+    unsigned long scoreCQtotalMicros = 0UL;
+    unsigned long scoreTotalLogUs = 0UL;
+    uint32_t vfo_freq = ui_get_vfo_freq();
+    uint32_t now_epoch = (uint32_t)time(nullptr);
+
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "application/json", "[");
+
+    bool first = true;
+    size_t sentCount = 0;
+    size_t skippedCount = 0;
+
+    for (auto it = snapshot.rbegin(); it != snapshot.rend(); ++it) {
+        QSO &q = *it;
+
+        JsonDocument qdoc;
+        JsonObject o = qdoc.to<JsonObject>();
+
+        o["call1"] = q.call1;
+        o["call2"] = q.call2;
+        o["grid1"] = q.grid1;
+        o["grid2"] = q.grid2;
+        o["snr1"]  = q.snr1;
+        o["snr2"]  = q.snr2;
+
+        unsigned long scoreStart = micros();
+        q.score1 = qsoStats.scoreCQ(q.call1, q.grid1, q.dxcc1, q.snr1, vfo_freq, now_epoch);
+        o["score1"] = q.score1;
+        q.score2 = strcmp(q.call2, "") == 0 ? 0 : qsoStats.scoreCQ(q.call2, q.grid2, q.dxcc2, q.snr2, vfo_freq, now_epoch);
+        o["score2"] = q.score2;
+        scoreCQtotalMicros += micros() - scoreStart;
+
+        o["report1"] = q.report1;
+        o["report2"] = q.report2;
+        o["cq"] = q.cq;
+        o["firstSeen"] = q.firstSeen;
+        o["lastHeard"] = q.lastHeard;
+        o["duration"] = (q.lastHeard > q.firstSeen) ? (q.lastHeard - q.firstSeen) : 0;
+        o["state"] = stateToString(q.state);
+        o["completed"] = (q.state == QSO_DONE);
+        o["cared"] = q.cared;
+        o["isMine"] = q.is_mine;
+        o["qso_id"] = q.qso_id;
+
+        unsigned long logStart = micros();
+        JsonArray logArr = o["log"].to<JsonArray>();
+        for (uint8_t i = 0; i < q.logCount; i++) {
+            JsonObject le = logArr.add<JsonObject>();
+            le["ts"] = q.log[i].timestamp;
+            le["state"] = stateToString(q.log[i].state);
+            le["msg"] = q.log[i].msg;
+            le["rtx"] = q.log[i].rtx;
+        }
+        scoreTotalLogUs += micros() - logStart;
+
+        // send jobs only for the QSO having pending jobs
+        if(ft8tx.getNextPendingJob(q.qso_id)) {
+            JsonArray queueArr = o["tx_queue"].to<JsonArray>();
+            for (FT8_TX::TxJob t : txJobs) {
+                if (t.qso_id != q.qso_id || t.cancelled) continue;
+                JsonObject te = queueArr.add<JsonObject>();
+                te["ts"] = t.targetSlot;
+                te["msg"] = t.message;
+                te["retries"] = t.retryCount;
+                te["transmitting"] = t.transmitting;
+            }
+       }    
+
+        uint8_t retries = ft8tx.getRetriesforQso(q.qso_id);
+        if (retries > 0) {
+            o["retryCount"] = retries;
+        } else {
+            o["nextRetry"] = nullptr;
+            o["retryCount"] = 0;
+            o["retryMessage"] = "";
+        }
+
+        const size_t needed = measureJson(qdoc) + 1U;
+        char *item = (char *)malloc(needed);
+        if (!item) {
+            skippedCount++;
+            Serial.printf(
+                "streamAllQSOsJson: skip qso_id=%d due to OOM allocating %u bytes (free_heap=%u, free_psram=%u)\n",
+                q.qso_id,
+                (unsigned)needed,
+                (unsigned)ESP.getFreeHeap(),
+                (unsigned)ESP.getFreePsram());
+            continue;
+        }
+
+        size_t serializedLen = serializeJson(qdoc, item, needed);
+        if (qdoc.overflowed() || serializedLen == 0) {
+            skippedCount++;
+            Serial.printf(
+                "streamAllQSOsJson: skip qso_id=%d due to serialization failure (overflow=%d, bytes=%u, free_heap=%u, free_psram=%u)\n",
+                q.qso_id,
+                qdoc.overflowed() ? 1 : 0,
+                (unsigned)serializedLen,
+                (unsigned)ESP.getFreeHeap(),
+                (unsigned)ESP.getFreePsram());
+            free(item);
+            continue;
+        }
+
+        if (!first) {
+            server.sendContent(",");
+        }
+
+        // Write the object in small pieces so the NET task does not block long enough
+        // to starve IDLE0 when the TCP stack applies backpressure.
+        static constexpr size_t STREAM_CHUNK = 128U;
+        for (size_t offset = 0; offset < serializedLen; offset += STREAM_CHUNK) {
+            size_t chunkLen = serializedLen - offset;
+            if (chunkLen > STREAM_CHUNK) {
+                chunkLen = STREAM_CHUNK;
+            }
+            server.sendContent(item + offset, chunkLen);
+            if (((offset / STREAM_CHUNK) & 0x03U) == 0U) {
+                vTaskDelay(1);
+            }
+        }
+        free(item);
+        first = false;
+        sentCount++;
+
+        // Let lower-priority tasks (including IDLE0) run to avoid TWDT on long streams.
+        if ((sentCount & 0x07U) == 0U) {
+           // vTaskDelay(1);
+        }
+    }
+
+    server.sendContent("]");
+
+    if (skippedCount > 0) {
+        Serial.printf("streamAllQSOsJson: sent %u/%u objects, skipped=%u\n",
+                      (unsigned)sentCount,
+                      (unsigned)snapshot.size(),
+                      (unsigned)skippedCount);
+    }
+
+    // Serial.printf("Total scoreCQ computation time: %lu microseconds\r\n", scoreCQtotalMicros);
+    // Serial.printf("Total log processing time: %lu microseconds\r\n", scoreTotalLogUs);
 }
 
 bool isRegion(const char *t) {
@@ -239,6 +452,8 @@ bool isRegion(const char *t) {
            strcmp(t, "AS") == 0 ||
            strcmp(t, "AF") == 0 ||
            strcmp(t, "OC") == 0 ||
+           strcmp(t, "RU") == 0 ||
+           strcmp(t, "DL") == 0 ||
            strcmp(t, "JA") == 0;
 }
 
@@ -456,6 +671,7 @@ Ft8MsgType QSOManager::parseMessage(const char *msg, Ft8Fields &out) {
     return out.type;
 }
 
+// used for new outgoing messages (not seen before, so no qso_id to match against)
 QSOManager::TxEnqueuePlan QSOManager::prepareOutgoingTx(const char* rawMsg, uint32_t nowTsSec, uint8_t requestedParity) {
     TxEnqueuePlan plan{};
 
@@ -523,7 +739,7 @@ QSOManager::TxPostResult QSOManager::onTxCompleted(uint32_t expectedQsoId, const
     }
 
     fields.ts = txDoneTsSec;
-    QSO* q = addOrUpdate(type, fields, txDoneTsSec, INT8_MIN);
+    QSO* q = addOrUpdate(type, fields, txDoneTsSec, INT8_MIN, &expectedQsoId);
     if (!q) {
         result.error = "failed to update qso after tx";
         return result;
@@ -662,7 +878,7 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
         return;
     }
 
-    // Serial.println("Processing message: " + String(msg) + " type=" + String(type) + " call1=" + String(f.call1) + " call2=" + String(f.call2) + " grid=" + String(f.grid) + " report=" + String(f.report) + " snr_db=" + String(s.snr_db));
+    // Serial.println("Processing message: " + String(msg) + " type=" + String(type) + " f.call1=" + String(f.call1) + " f.call2=" + String(f.call2) + " f.grid=" + String(f.grid) + " f.report=" + String(f.report) + " s.snr_db=" + String(s.snr_db));
 
     // store the decoded fields in the ft8_frequency_optimizer for frequency optimization (CQ density tracking)
     // Serial.println("Storing spot in ft8FreqOptimizer: freq=" + String(s.freq_hz) + " snr_db=" + String(s.snr_db) + " ts=" + String(f.ts) + " is_cq=" + String(f.is_cq) + " vfo_freq=" + String(ui_get_vfo_freq()));
@@ -671,11 +887,13 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
     // Prepare and send PSKReporter spot for this message
     Ft8Spot psk_spot = s;
     if(f.type <= MSG_CQ_TEST){
+        // Serial.println("Message is a CQ type, preparing PSKReporter spot with callsign=" + String(f.call1) + " grid=" + String(f.grid));
         strlcpy(psk_spot.callsign, f.call1, sizeof(psk_spot.callsign));
         if (f.hasGrid) {
             strlcpy(psk_spot.grid, f.grid, sizeof(psk_spot.grid));
         }
     } else {
+        // Serial.println("Message is a non-CQ type, preparing PSKReporter spot with callsign=" + String(f.call2) + " grid=" + String(f.grid));
         strlcpy(psk_spot.callsign, f.call2, sizeof(psk_spot.callsign));
         if (f.hasGrid) {
             strlcpy(psk_spot.grid, f.grid, sizeof(psk_spot.grid));
@@ -702,19 +920,6 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
         return;
     }  
     
-    // if(strcmp(f.call1, ui_get_mycall()) == 0 || (f.hasCall2 && strcmp(f.call2, ui_get_mycall()) == 0)){
-        
-    //     time_t timestamp;
-    //     time(&timestamp);
-    
-    //     // Serial.printf("Adding log entry to qso_id: %d for message involving me: %s call1=%s call2=%s type=%d QSO state is %d. Generated reply: %s\r\n", q->qso_id, msg, f.call1, f.call2, type, q->state, reply.c_str());
-    //     addLog(q, 'R', timestamp, q->state, msg);
-        
-    // }else 
-    //if(type <= MSG_CQ_TEST){
-        
-    // always log CQ messages even if not directed to me
-    //time_t timestamp;
     time(&timestamp);
 
     // Serial.printf("Adding log entry to qso_id: %d for CQ message: %s call1=%s call2=%s type=%d QSO state is %d.\r\n", q->qso_id, msg, f.call1, f.call2, type, q->state);
@@ -730,7 +935,7 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
 
         // check any pending retry for this QSO 
         FT8_TX::TxJob * pendingJob = ft8tx.getNextPendingJob(q->qso_id);
-                if(pendingJob != nullptr && pendingJob->msgType >= reply_type){
+        if(pendingJob != nullptr && pendingJob->msgType >= reply_type){
             //Serial.printf("Found pending transmission for QSO %d, message: %s, type: %d\r\n", q->qso_id, pendingJob->message, pendingJob->msgType);
         }else {
             ft8tx.cancelJobsForQso(q->qso_id); // cancel any pending transmission for this QSO, we will schedule a new one with the updated message (reply)    
@@ -747,24 +952,60 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
     // --------------------------------------------------------
     // reduce the list size if needed (remove oldest non-"mine" first)
     // --------------------------------------------------------
+    // delete CQs oldest than 5 minutes, they are probably stale and will never be replied (but only if they are not "mine", otherwise we risk deleting a CQ for which we are still waiting for a reply and for which we have pending transmission jobs)
+    for (auto it = qso_list.begin(); it != qso_list.end(); ++it) {
+        FT8_TX::TxJob * pending_jobs = ft8tx.getNextPendingJob(it->qso_id);
+        long ageSec = (timestamp - it->firstSeen);
+        // Serial.printf("Checking if I can remove QSO %d with age %lu seconds, state %d, pending job: %s\r\n", it->qso_id, ageSec, it->state, pending_jobs ? "YES" : "NO");   
+        if (it->state == QSO_CQ && pending_jobs == nullptr && ageSec > 300) {
+            Serial.printf("Removing oldest %lu mine QSO with no pending job %d\n", ageSec, it->qso_id);
+            qso_list.erase(it);
+        }
+    }
+
     if (qso_list.size() >= QSO_LIST_MAX) {
 
+        lockQsoList();
         bool removed = false;
-        // Serial.printf("QSO list size is %d, exceeded max size, removing oldest non-mine QSO if any...\r\n", qso_list.size());
+        
         for (auto it = qso_list.begin(); it != qso_list.end(); ++it) {
-            if (!it->is_mine) {
-                // Serial.printf("Removing oldest non-mine QSO %d\n", it->qso_id);
+            FT8_TX::TxJob * pending_jobs = ft8tx.getNextPendingJob(it->qso_id);
+            if (it->is_mine && it->state < QSO_DONE && pending_jobs == nullptr ) {
+                Serial.printf("Removing oldest mine QSO with no pending job %d\n", it->qso_id);
                 qso_list.erase(it);
                 removed = true;
                 break;
             }
         }
 
-        // fallback: if all are "mine", remove oldest anyway
+        // fallback: if it removed nothing, remove oldest not mine, excluding CQ
         if (!removed) {
-            // Serial.printf("All QSOs are mine, removing oldest QSO %d...\r\n", qso_list.front().qso_id);
-            qso_list.erase(qso_list.begin());
+            for (auto it = qso_list.begin(); it != qso_list.end(); ++it) {
+                if (!it->is_mine && it->state > QSO_CQ) { 
+                    Serial.printf("Removing oldest non-mine QSO %d\n", it->qso_id);
+                    qso_list.erase(it);
+                    removed = true;
+                    break;
+                }
+            }
         }
+
+        // fallback: if it removed nothing, remove oldest mine, excluding pending jobs
+        if (!removed) {
+            for (auto it = qso_list.begin(); it != qso_list.end(); ++it) {
+                FT8_TX::TxJob * pending_jobs = ft8tx.getNextPendingJob(it->qso_id);
+                if (it->is_mine && pending_jobs == nullptr) { 
+                    Serial.printf("Removing oldest mine QSO %d\n", it->qso_id);
+                    qso_list.erase(it);
+                    removed = true;
+                    break;
+                }
+            }
+        }
+
+
+
+        unlockQsoList();
     }
 }
 
@@ -780,14 +1021,19 @@ QSO* QSOManager::getQSOByFields(Ft8Fields &f) {
 
     for (auto &q : qso_list) {
 
-        if (!q.call1) continue;
+        if (!q.call1) continue; // sanity check, should not happen
+        if(q.state == QSO_DONE) continue; // if the QSO is already completed we skip it, we want to match only ongoing QSOs (in CQ, CALLING, REPLYING states), 
+                                          // otherwise we risk matching completed QSOs for which we are just receiving new CQ messages 
+                                          // (e.g. from a station calling CQ again after completing a QSO with me, or from a station calling CQ 
+                                          // that I tried to call but got no reply and then it called CQ again, etc..    )
         const char* qc1 = q.call1;
-
         const char* qc2 = (q.call2 && strlen(q.call2) > 0) ? q.call2 : ""; // normalize call2
 
         if(f.type <= MSG_CQ_TEST){
-             // For CQ messages we want to match on call1 only, and ignore call2 (it can be empty or not, doesn't matter)
-            if (strcmp(qc1, a) == 0 && q.state == QSO_CQ) {
+             // For CQ messages we want to match on call1 only
+            if (strcmp(qc1, a) == 0 && q.state == QSO_CQ  ||
+                // or for CALL messages where I'm call2 (i.e. I tried to call someone but I got a CQ back)
+                strcmp(qc1, a) == 0 && strcmp(qc2, ui_get_mycall()) == 0 && q.state == QSO_CALLING ) {
                 return &q;
             }
         }else if(f.type == MSG_CALL && q.state == QSO_CQ){
@@ -855,18 +1101,30 @@ QSO* QSOManager::getQsoById(int qso_id) {
 }
 
 
-QSO * QSOManager::addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_t timestamp, int8_t snr_db){ //, const String &reply) {
+QSO * QSOManager::addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_t timestamp, int8_t snr_db, const uint32_t* qso_id){ //, const String &reply) {
 
     if (!f.hasCall1) return nullptr; // safety check: call1 is mandatory for all message types we handle
 
-    QSO *qso = getQSOByFields(f);
+    lockQsoList();
+
+    QSO *qso = nullptr;
+    bool forcedQso = false;
+
+    if (qso_id) {
+        qso = getQsoById(static_cast<int>(*qso_id));
+        forcedQso = (qso != nullptr);
+    }
+
+    if (!qso) {
+        qso = getQSOByFields(f);
+    }
 
     // --------------------------------------------------------
     // CREATE if needed (ANY message, not only CQ)
     // --------------------------------------------------------
     if (!qso ||  // if there's still no QSO
                  // or the QSO exist and it's a CQ message and the QSO is completed, we create a new QSO
-        (type <= MSG_CQ_TEST && qso->state == QSO_DONE ) 
+        (!forcedQso && type <= MSG_CQ_TEST && qso->state == QSO_DONE ) 
         ) {
         
         // if(!qso){
@@ -881,7 +1139,8 @@ QSO * QSOManager::addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_t timestamp,
         QSO q{};
         safeCopy(q.call1, f.call1, sizeof(q.call1));
         q.dxcc1 = qsoStats.dxccFromCall(f.call1);
-
+        q.score1 = qsoStats.scoreCQ(q.call1, q.grid1, q.dxcc1, q.snr1, ui_get_vfo_freq(), timestamp);
+        
         if (f.hasCall2) {
             safeCopy(q.call2, f.call2, sizeof(q.call2));
             q.dxcc2 = qsoStats.dxccFromCall(f.call2);
@@ -951,9 +1210,12 @@ QSO * QSOManager::addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_t timestamp,
         if (strcmp(f.call1, qso->call1) == 0){
             safeCopy(qso->call2, f.call2, sizeof(qso->call2));
             qso->dxcc2 = qsoStats.dxccFromCall(f.call2);
+            qso->score2 = qsoStats.scoreCQ(qso->call2, qso->grid2, qso->dxcc2, qso->snr2, ui_get_vfo_freq(), timestamp);
+        
         }else{
             safeCopy(qso->call2, f.call1, sizeof(qso->call2));
             qso->dxcc2 = qsoStats.dxccFromCall(f.call1);
+            qso->score2 = qsoStats.scoreCQ(qso->call2, qso->grid2, qso->dxcc2, qso->snr2, ui_get_vfo_freq(), timestamp);
         }
         // 🔴 as soon as call2 appears, the QSO is no longer CQ
         if (qso->state == QSO_CQ)
@@ -1069,6 +1331,7 @@ QSO * QSOManager::addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_t timestamp,
 
     
 
+    unlockQsoList();
     return qso;
 
 }

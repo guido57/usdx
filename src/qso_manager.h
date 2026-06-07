@@ -5,6 +5,9 @@
 #include <vector>
 #include <cstring>
 #include <cctype>
+#include <WebServer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 #include "wifi_config.h"
 #include "ui.h"
@@ -43,7 +46,7 @@ public:
     // Retry mechanism for unanswered CQ calls
     // This allows us to automatically retry sending a reply if we don't get a response within a certain time frame.
     // ------------------------------------------------------------
-    const uint8_t MAX_RETRIES = 3;
+    // const uint8_t MAX_RETRIES = 3;
     
     // struct RetryEntry {
     //     int qso_id;              // link to QSO
@@ -64,29 +67,35 @@ public:
 
     // Public API
     void processFt8Spot(const Ft8Spot &s);
-    QSO * addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_t timestamp, int8_t snr_db); //, const String &reply);
+    QSO * addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_t timestamp, int8_t snr_db, const uint32_t* qso_id = nullptr); //, const String &reply);
     QSO * getQSOByFields(Ft8Fields &f);
     QSO* getQsoById(int qso_id);
 
 
     String getAllQSOsJson();
+    void streamAllQSOsJson(WebServer &server);
     String getActiveQSOsJson();
     String getCompletedQSOsJson();
     Ft8MsgType parseMessage(const char *msg, Ft8Fields &out);
     TxEnqueuePlan prepareOutgoingTx(const char* rawMsg, uint32_t nowTsSec, uint8_t requestedParity);
     TxPostResult onTxCompleted(uint32_t expectedQsoId, const char* sentMsg, uint32_t txDoneTsSec, uint32_t txFreqHz);
+    String generateReply(Ft8MsgType type, const Ft8Fields &f, int snr_db, Ft8MsgType &output_type);
+
+    bool isCallsign(const char *s);
+    
 
 private:
     // Helpers
+    void lockQsoList();
+    void unlockQsoList();
     void safeCopy(char* dst, const char* src, size_t size);
-    bool isCallsign(const char *s);
     bool isGrid(const char *s);
     bool isReport(const char *s);
 
     const char* extractFt8Message(const char* line);
     const char* stateToString(QsoState s);
     void finalizeCompletedQso(QSO* q, uint32_t freq_hz, uint32_t timestampSec);
+    SemaphoreHandle_t qsoMutex = nullptr;
 
     
-    String generateReply(Ft8MsgType type, const Ft8Fields &f, int snr_db, Ft8MsgType &output_type);
 };

@@ -3,8 +3,71 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <time.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include <esp_heap_caps.h>
+#include "qso_manager.h"
+
+extern QSOManager qsoManager; // declared in wifi_config.cpp, used here to get callsign validation and other helpers
+
+static constexpr uint32_t CALLSIGN_RECENCY_WINDOW_SEC = 3600;
+static constexpr float CALLSIGN_RECENCY_MAX_PENALTY = 600.0f;
+
+static String epochToYYYYMMDD(uint32_t epoch)
+{
+    if (epoch == 0) {
+        return "";
+    }
+
+    time_t raw = static_cast<time_t>(epoch);
+    struct tm tm_utc;
+    if (!gmtime_r(&raw, &tm_utc)) {
+        return "";
+    }
+
+    char buf[20];
+    snprintf(buf,
+             sizeof(buf),
+             "%04d%02d%02d_%02d%02d%02d",
+             tm_utc.tm_year + 1900,
+             tm_utc.tm_mon + 1,
+             tm_utc.tm_mday,
+             tm_utc.tm_hour,
+             tm_utc.tm_min,
+             tm_utc.tm_sec);
+    return String(buf);
+}
+
+template <typename T>
+static T* allocPreferPsram(size_t count, const char* tag)
+{
+    if (count == 0) {
+        return nullptr;
+    }
+
+    size_t bytes = sizeof(T) * count;
+    bool allocated_in_psram = false;
+    T* ptr = static_cast<T*>(heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (ptr) {
+        allocated_in_psram = true;
+    }
+    if (!ptr) {
+        ptr = static_cast<T*>(heap_caps_malloc(bytes, MALLOC_CAP_8BIT));
+    }
+
+    if (!ptr) {
+        Serial.printf("QSOStats: allocation failed for %s (%u bytes)\n", tag, (unsigned)bytes);
+        return nullptr;
+    }
+
+    memset(ptr, 0, bytes);
+    Serial.printf("QSOStats: allocated %s (%u bytes) in %s\n",
+                  tag,
+                  (unsigned)bytes,
+                  allocated_in_psram ? "PSRAM" : "RAM");
+    return ptr;
+}
 
 // ---------------- RECORD ----------------
 struct StatsRecord {
@@ -15,6 +78,7 @@ struct StatsRecord {
     uint8_t worked_band[MAX_DXCC][(NUM_BANDS + 7) / 8];
     uint16_t qsos_with_dxcc[MAX_DXCC];
     uint32_t last_qso_time[MAX_DXCC];
+    CallsignRecencyEntry worked_callsign[MAX_CALLSIGN_HISTORY];
 
     uint32_t end_marker;
 };
@@ -35,18 +99,64 @@ QSOStats::QSOStats()
     memset(worked_band, 0, sizeof(worked_band));
     memset(qsos_with_dxcc, 0, sizeof(qsos_with_dxcc));
     memset(last_qso_time, 0, sizeof(last_qso_time));
+    dxccTable = nullptr;
+    prefixTable = nullptr;
+    callsign_history = nullptr;
 
     current_version = 0;
     current_index = -1;
     last_save_ms = 0;
     stats_dirty = false;
     save_task_handle = nullptr;
+    callsign_history_next = 0;
+    dynamic_storage_ready = false;
 
     prefixCount = 0;
+}
+
+QSOStats::~QSOStats()
+{
+    if (dxccTable) {
+        heap_caps_free(dxccTable);
+        dxccTable = nullptr;
+    }
+    if (prefixTable) {
+        heap_caps_free(prefixTable);
+        prefixTable = nullptr;
+    }
+    if (callsign_history) {
+        heap_caps_free(callsign_history);
+        callsign_history = nullptr;
+    }
+    dynamic_storage_ready = false;
+}
+
+bool QSOStats::ensureDynamicStorage()
+{
+    if (dynamic_storage_ready) {
+        return true;
+    }
+
+    dxccTable = allocPreferPsram<DXCCEntry>(MAX_DXCC, "dxccTable");
+    prefixTable = allocPreferPsram<PrefixEntry>(MAX_PREFIXES, "prefixTable");
+    callsign_history = allocPreferPsram<CallsignRecencyEntry>(MAX_CALLSIGN_HISTORY, "callsign_history");
+
+    if (!dxccTable || !prefixTable || !callsign_history) {
+        Serial.println("QSOStats: dynamic storage initialization failed");
+        return false;
+    }
+
+    dynamic_storage_ready = true;
+    return true;
 }
 // ---------------- INIT ----------------
 void QSOStats::begin()
 {
+    if (!ensureDynamicStorage()) {
+        Serial.println("QSOStats: begin aborted due to memory allocation failure");
+        return;
+    }
+
     loadFromFlash();
 
     if (!save_task_handle) {
@@ -158,6 +268,10 @@ void QSOStats::cleanPrefix(char* p)
 
 bool QSOStats::loadCTYFromFile(const char* path)
 {
+    if (!ensureDynamicStorage()) {
+        return false;
+    }
+
     File f = LittleFS.open(path, "r");
     if (!f) {
         Serial.printf("Failed to open CTY file: %s\n", path);
@@ -205,6 +319,10 @@ static inline char* ltrim(char* s)
 // ---------------- CTY PARSER ----------------
 void QSOStats::loadCTY(const char* text)
 {
+    if (!ensureDynamicStorage()) {
+        return;
+    }
+
     Serial.println("Loading CTY data...");
     Serial.printf("CTY data length: %d\n", (int)strlen(text));
 
@@ -321,6 +439,10 @@ void QSOStats::loadCTY(const char* text)
 
 int QSOStats::dxccFromCall(const char* call)
 {
+    if (!dynamic_storage_ready || !prefixTable || !call || call[0] == '\0') {
+        return -1;
+    }
+
     int bestDxcc = -1;
     int bestLen = 0;
 
@@ -340,15 +462,132 @@ int QSOStats::dxccFromCall(const char* call)
 
 // ---------------- SCORING ----------------
 
-float QSOStats::scoreCQ(const int16_t dxcc, int snr, uint32_t freq_hz)
+// float QSOStats::scoreCQ(const int16_t dxcc, int snr, uint32_t freq_hz)
+// {
+//     return scoreCQ(nullptr, nullptr, dxcc, snr, freq_hz, (uint32_t)time(nullptr));
+// }
+
+float QSOStats::scoreCQ(const char* call, const char* grid, const int16_t dxcc, int snr, uint32_t freq_hz, uint32_t now_epoch)
 {
     int band = freqToBand(freq_hz);
     if (band < 0) return 0.0f;
 
-   //int dxcc = dxccFromCall(call);
+    //int dxcc = dxccFromCall(call);
+    if(strcmp(grid,"") == 0) {
+        return 0.0f;
+    }
+
+    if(qsoManager.isCallsign(call) == false) {
+        return 0.0f;
+    }
+
     if (dxcc < 0) return 0.0f;
     float score = computeScore(dxcc, snr, band);
+    if (now_epoch == 0) {
+        now_epoch = (uint32_t)time(nullptr);
+    }
+
+    score -= computeCallsignRecencyPenalty(call, now_epoch);
+    if (score < 0.0f) score = 0.0f;
+
     return score;
+}
+
+void QSOStats::normalizeCallsign(const char* in, char* out, size_t out_len) const
+{
+    if (!out || out_len == 0) {
+        return;
+    }
+
+    out[0] = '\0';
+    if (!in) {
+        return;
+    }
+
+    size_t j = 0;
+    for (size_t i = 0; in[i] != '\0' && j < out_len - 1; ++i) {
+        unsigned char c = static_cast<unsigned char>(in[i]);
+        if (isalnum(c) || c == '/') {
+            out[j++] = static_cast<char>(toupper(c));
+        }
+    }
+
+    out[j] = '\0';
+}
+
+int QSOStats::findCallsignHistory(const char* normalizedCall) const
+{
+    if (!callsign_history || !normalizedCall || normalizedCall[0] == '\0') {
+        return -1;
+    }
+
+    for (int i = 0; i < MAX_CALLSIGN_HISTORY; ++i) {
+        if (callsign_history[i].call[0] == '\0') {
+            continue;
+        }
+        if (strcmp(callsign_history[i].call, normalizedCall) == 0) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+void QSOStats::updateCallsignRecency(const char* call, uint32_t epoch)
+{
+    if (!callsign_history) {
+        return;
+    }
+
+    char normalized[12] = {0};
+    normalizeCallsign(call, normalized, sizeof(normalized));
+    if (normalized[0] == '\0') {
+        return;
+    }
+
+    int idx = findCallsignHistory(normalized);
+    if (idx >= 0) {
+        callsign_history[idx].last_worked = epoch;
+        return;
+    }
+
+    CallsignRecencyEntry& slot = callsign_history[callsign_history_next];
+    strncpy(slot.call, normalized, sizeof(slot.call) - 1);
+    slot.call[sizeof(slot.call) - 1] = '\0';
+    slot.last_worked = epoch;
+
+    callsign_history_next = (callsign_history_next + 1) % MAX_CALLSIGN_HISTORY;
+}
+
+float QSOStats::computeCallsignRecencyPenalty(const char* call, uint32_t now_epoch) const
+{
+    if (!callsign_history) {
+        return 0.0f;
+    }
+
+    char normalized[12] = {0};
+    normalizeCallsign(call, normalized, sizeof(normalized));
+    if (normalized[0] == '\0') {
+        return 0.0f;
+    }
+
+    int idx = findCallsignHistory(normalized);
+    if (idx < 0) {
+        return 0.0f;
+    }
+
+    uint32_t last = callsign_history[idx].last_worked;
+    if (last == 0 || now_epoch <= last) {
+        return 0.0f;
+    }
+
+    uint32_t age_sec = now_epoch - last;
+    if (age_sec >= CALLSIGN_RECENCY_WINDOW_SEC) {
+        return 0.0f;
+    }
+
+    float factor = 1.0f - (static_cast<float>(age_sec) / static_cast<float>(CALLSIGN_RECENCY_WINDOW_SEC));
+    return CALLSIGN_RECENCY_MAX_PENALTY * factor;
 }
 
 // compute score based on whether it's a new DXCC, new band, rarity (QSOs with that DXCC), and SNR
@@ -399,6 +638,7 @@ void QSOStats::onQSOCompleted(const char* call, uint32_t freq_hz, uint32_t epoch
         qsos_with_dxcc[dxcc]++;
 
     last_qso_time[dxcc] = epoch;
+    updateCallsignRecency(call, epoch);
     stats_dirty = true;
 }
 // ---------------- PERIODIC SAVE ----------------
@@ -414,7 +654,7 @@ void QSOStats::periodicSave(unsigned long now_ms)
 
     saveToFlash();
     last_save_ms = now_ms;
-    Serial.println("QSOStats: Save queued at " + String(now_ms) + " ms");
+    //Serial.println("QSOStats: Save queued at " + String(now_ms) + " ms");
 }
 
 // ---------------- FILE HELPERS ----------------
@@ -504,6 +744,19 @@ void QSOStats::loadFromFlash()
     memcpy(worked_band, rec.worked_band, sizeof(worked_band));
     memcpy(qsos_with_dxcc, rec.qsos_with_dxcc, sizeof(qsos_with_dxcc));
     memcpy(last_qso_time, rec.last_qso_time, sizeof(last_qso_time));
+    if (callsign_history) {
+        memcpy(callsign_history, rec.worked_callsign, sizeof(CallsignRecencyEntry) * MAX_CALLSIGN_HISTORY);
+
+        // Continue appending from the first empty slot after restore.
+        callsign_history_next = 0;
+        for (uint16_t i = 0; i < MAX_CALLSIGN_HISTORY; ++i) {
+            if (callsign_history[i].call[0] == '\0') {
+                callsign_history_next = i;
+                break;
+            }
+            callsign_history_next = (i + 1) % MAX_CALLSIGN_HISTORY;
+        }
+    }
 
     current_version = rec.version;
     current_index = idx;
@@ -532,6 +785,11 @@ void QSOStats::queueSaveSnapshot()
     memcpy(pending_rec.worked_band, worked_band, sizeof(worked_band));
     memcpy(pending_rec.qsos_with_dxcc, qsos_with_dxcc, sizeof(qsos_with_dxcc));
     memcpy(pending_rec.last_qso_time, last_qso_time, sizeof(last_qso_time));
+    if (callsign_history) {
+        memcpy(pending_rec.worked_callsign, callsign_history, sizeof(CallsignRecencyEntry) * MAX_CALLSIGN_HISTORY);
+    } else {
+        memset(pending_rec.worked_callsign, 0, sizeof(pending_rec.worked_callsign));
+    }
 
     pending_rec.end_marker = STATS_MAGIC;
 
@@ -621,6 +879,10 @@ int QSOStats::findLatestRecord()
 
 const char* QSOStats::getCountryName(int dxcc)
 {
+    if (!dxccTable) {
+        return "Unknown";
+    }
+
     for (int i = 0; i < MAX_DXCC; i++) {
         if (dxccTable[i].dxcc == dxcc)
             return dxccTable[i].name;
@@ -680,6 +942,28 @@ String QSOStats::getJsonQSOsDXCC()
     return out;
 }
 
+String QSOStats::getJsonWorkedCallsign()
+{
+    JsonDocument doc;
+    JsonArray arr = doc.to<JsonArray>();
+
+    for (int i = 0; i < MAX_CALLSIGN_HISTORY; i++) {
+        if (callsign_history[i].call[0] == '\0') {
+            continue;
+        }
+
+        JsonObject o = arr.add<JsonObject>();
+        o["callsign"] = callsign_history[i].call;
+        o["last_worked"] = callsign_history[i].last_worked;
+        o["last_worked_yyyymmdd_hhmmss"] = epochToYYYYMMDD(callsign_history[i].last_worked);
+    }
+
+    String out;
+    serializeJson(doc, out);
+    return out;
+}
+
+
 String QSOStats::getJsonBandsDXCC()
 {
     JsonDocument doc;
@@ -724,6 +1008,11 @@ void QSOStats::clearAllWorkedDXCC()
             clearBit(worked_band[dxcc], band);
         }
     }
+
+    if (callsign_history) {
+        memset(callsign_history, 0, sizeof(CallsignRecencyEntry) * MAX_CALLSIGN_HISTORY);
+    }
+    callsign_history_next = 0;
 
     stats_dirty = true;
 }
