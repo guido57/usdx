@@ -27,6 +27,9 @@ static Mode vfomode[2] = { LSB, LSB };
 static int32_t ft8_offset = 1500; // Hz
 static bool ft8_offset_enabled = false;
 static char ft8_testmsg[64] = ""; // FT8 test message
+static uint8_t ft8_mode = 0; // 0=off, 1=auto call, 2=cq continuous
+static uint8_t ft8_max_retries = 3; // max number of automatic retries for unanswered FT8 messages
+static uint8_t ft8_send_parity = 0; // 0=Even 1=Odd 2=Both (ignore parity and send on the first slot )
 static char mycall[10] = ""; // my callsign
 static char mygrid[8] = ""; // my grid locator
 static char myantenna[32] = ""; // my antenna description for pskreporter
@@ -119,6 +122,9 @@ char * ui_get_myantenna() { return myantenna; }
 char * ui_get_mysoftware() { return mysoftware; }
 char * ui_get_myrig() { return myrig; }
 char * ui_get_ft8_testmsg() { return ft8_testmsg; }
+uint8_t ui_get_ft8_mode() { return ft8_mode; }
+uint8_t ui_get_ft8_max_retries() { return ft8_max_retries; }
+uint8_t ui_get_ft8_send_parity() { return ft8_send_parity; }
 char * ui_get_ws_server_host() { return ws_server_host; }
 uint16_t ui_get_ws_server_port() { return ws_server_port; }
 bool ui_get_ws_server_enabled() { return ws_server_enabled; }
@@ -194,6 +200,10 @@ static void loadSettings() {
   ft8_offset = constrain(s.ft8_offset, 0, 3000);
   ft8_offset_enabled = (s.ft8_offset_enabled != 0);
   strlcpy(ft8_testmsg, s.ft8_testmsg, sizeof(ft8_testmsg));
+  Serial.printf("Loaded settings: ft8_mode=%d\n", s.ft8_mode);
+  ft8_mode = constrain(s.ft8_mode, 0, 2);
+  ft8_max_retries = constrain(s.ft8_max_retries, 0, 10);
+  ft8_send_parity = constrain(s.ft8_send_parity, 0, 2);
   strlcpy(ws_server_host, s.ws_server_host, sizeof(ws_server_host));
   ws_server_port = s.ws_server_port;
   ws_server_enabled = (s.ws_server_enabled != 0);
@@ -238,6 +248,10 @@ bool ui_get_settings(UiSettings* out) {
   out->ft8_offset = ft8_offset;
   out->ft8_offset_enabled = ft8_offset_enabled ? 1 : 0;
   strlcpy(out->ft8_testmsg, ft8_testmsg, sizeof(out->ft8_testmsg));
+  Serial.printf("Getting settings: ft8_mode=%d\n", ft8_mode);
+  out->ft8_mode = ft8_mode;
+  out->ft8_max_retries = ft8_max_retries;
+  out->ft8_send_parity = ft8_send_parity;
   strlcpy(out->ws_server_host, ws_server_host, sizeof(out->ws_server_host));
   out->ws_server_port = ws_server_port;
   out->ws_server_enabled = ws_server_enabled ? 1 : 0;
@@ -269,6 +283,10 @@ void ui_apply_settings(const UiSettings& s) {
   ft8_offset = constrain(s.ft8_offset, 0, 3000);
   ft8_offset_enabled = (s.ft8_offset_enabled != 0);
   strlcpy(ft8_testmsg, s.ft8_testmsg, sizeof(ft8_testmsg));
+  Serial.printf("Applying settings: ft8_mode=%d\n", s.ft8_mode);
+  ft8_mode = constrain(s.ft8_mode, 0, 2);
+  ft8_max_retries = constrain(s.ft8_max_retries, 0, 10);
+  ft8_send_parity = constrain(s.ft8_send_parity, 0, 2);
   strlcpy(ws_server_host, s.ws_server_host, sizeof(ws_server_host));
   ws_server_port = s.ws_server_port;
   ws_server_enabled = (s.ws_server_enabled != 0);
@@ -316,6 +334,10 @@ static void saveSettings() {
   s.ft8_offset = ft8_offset;
   s.ft8_offset_enabled = ft8_offset_enabled ? 1 : 0;
   strlcpy(s.ft8_testmsg, ft8_testmsg, sizeof(s.ft8_testmsg));
+  Serial.printf("Saving settings: ft8_mode=%d\n", s.ft8_mode);  
+  s.ft8_mode = ft8_mode;
+  s.ft8_max_retries = ft8_max_retries;
+  s.ft8_send_parity = ft8_send_parity;
   strlcpy(s.ws_server_host, ws_server_host, sizeof(s.ws_server_host));
   s.ws_server_port = ws_server_port;
   s.ws_server_enabled = ws_server_enabled ? 1 : 0;

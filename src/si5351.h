@@ -77,8 +77,29 @@ public:
     pll_regs[7] = BB0(msp2);
   }
 
+
+  bool tryRecoverI2c(const char* where) {
+    if (_i2c_error == 0) return true;
+
+    const uint8_t prev = _i2c_error;
+    _i2c_error = 0;
+    delay(1);
+
+    Wire.beginTransmission(SI5351_ADDR);
+    uint8_t rc = Wire.endTransmission();
+
+    if (rc == 0) {
+      Serial.printf("[SI5351] I2C recovered at %s (prev=%u)\n", where, prev);
+      return true;
+    }
+
+    _i2c_error = rc;
+    Serial.printf("[SI5351] I2C still failing at %s (prev=%u now=%u)\n", where, prev, rc);
+    return false;
+  }
+
   inline void SendPLLRegisterBulk(){
-    if (_i2c_error) return;
+    if (_i2c_error && !tryRecoverI2c("SendPLLRegisterBulk")) return;
     Wire.beginTransmission(SI5351_ADDR);
     Wire.write(26+0*8 + 4);  // Write to PLLA
     //Wire.write(26+1*8 + 4);  // Write to PLLB
@@ -90,7 +111,7 @@ public:
     delay(0);
   }
   void SendRegister(uint8_t reg, uint8_t* data, uint8_t n){
-    if (_i2c_error) return;
+    if (_i2c_error && !tryRecoverI2c("SendRegister")) return;
     Wire.beginTransmission(SI5351_ADDR);
     Wire.write(reg);
     while (n--) Wire.write(*data++);

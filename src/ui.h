@@ -24,6 +24,9 @@ struct UiSettings {
 	int32_t ft8_offset;
 	uint8_t ft8_offset_enabled;
 	char ft8_testmsg[64];
+	uint8_t ft8_mode;
+	uint8_t ft8_max_retries;
+	uint8_t ft8_send_parity;
 	char ws_server_host[16];
 	uint16_t ws_server_port;
 	uint8_t ws_server_enabled;
@@ -55,6 +58,9 @@ void ui_apply_settings(const UiSettings& s);
 // --- Radio state accessors for hardware programming (SI5351) ---
 // Keep these minimal: main.cpp uses them to mirror main.ori "change -> si5351.freq()" logic.
 enum UiMode : uint8_t { UI_LSB = 0, UI_USB = 1, UI_CW = 2, UI_AM = 3 };
+
+enum UiFT8Mode : uint8_t { FT8_MODE_OFF = 0, FT8_MODE_AUTO_CALL = 1, FT8_MODE_CQ_CONTINUOUS = 2 };	
+
 
 // UI helpers used by main.cpp (logging + driver-mode mapping).
 const char* ui_mode_label(UiMode mode);
@@ -96,3 +102,7 @@ char * ui_get_ft8_testmsg();
 char * ui_get_ws_server_host();
 uint16_t ui_get_ws_server_port();
 bool ui_get_ws_server_enabled();
+
+uint8_t ui_get_ft8_mode();
+uint8_t ui_get_ft8_max_retries();
+uint8_t ui_get_ft8_send_parity();

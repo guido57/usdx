@@ -61,7 +61,7 @@ QueueHandle_t adifQueue;       // ADIF upload items
 #define ETH_PHY_TYPE ETH_PHY_W5500
 #define ETH_PHY_ADDR 1
 #define ETH_PHY_CS   1 // 15
-#define ETH_PHY_IRQ  6 // 4
+#define ETH_PHY_IRQ  6 // wired to W5500 INT
 #define ETH_PHY_RST  8 // 5
 
 // SPI pins
@@ -183,16 +183,16 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
 
 // ===== HTTP Handlers =====
 
-static void handleApiStatus() {
-    JsonDocument doc;
-    doc["ip"] = WiFi.localIP().toString();
-    doc["mode"] = (WiFi.getMode() & WIFI_STA) ? "STA" : "AP";
-    //doc["ws_clients"] = wsServer.connectedClients();
-    doc["time_synced"] = timeSynced;
-    String out;
-    serializeJson(doc, out);
-    server.send(200, "application/json", out);
-}
+// static void handleApiStatus() {
+//     JsonDocument doc;
+//     doc["ip"] = WiFi.localIP().toString();
+//     doc["mode"] = (WiFi.getMode() & WIFI_STA) ? "STA" : "AP";
+//     //doc["ws_clients"] = wsServer.connectedClients();
+//     doc["time_synced"] = timeSynced;
+//     String out;
+//     serializeJson(doc, out);
+//     server.send(200, "application/json", out);
+// }
 
 static void handleApiUi() {
     UiSettings s;
@@ -205,6 +205,9 @@ static void handleApiUi() {
     doc["ft8_offset"] = s.ft8_offset;
     doc["ft8_offset_enabled"] = s.ft8_offset_enabled;
     doc["ft8_testmsg"] = s.ft8_testmsg;
+    doc["ft8_mode"] = s.ft8_mode;
+    doc["ft8_max_retries"] = s.ft8_max_retries;
+    doc["ft8_send_parity"] = s.ft8_send_parity;
     doc["ws_server_host"] = s.ws_server_host;
     doc["ws_server_port"] = s.ws_server_port;
     doc["ws_server_enabled"] = s.ws_server_enabled;
@@ -249,6 +252,7 @@ static void handleApiUiSave() {
     #define JSET_STRING(name) strlcpy(s.name, doc[#name] | "", sizeof(s.name));
     JSET(vfoA);
     JSET(ft8_offset); JSET(ft8_offset_enabled); JSET_STRING(ft8_testmsg); 
+    JSET(ft8_mode); JSET(ft8_max_retries); JSET(ft8_send_parity);
     JSET_STRING(ws_server_host);
     JSET(ws_server_port); 
     JSET(ws_server_enabled);
@@ -330,9 +334,65 @@ static void handleFt8Stop() {
 //     String out;
 //     serializeJson(doc, out);
 //     server.send(200, "application/json", out);
-
-    
 // }
+
+static void handleApiStatus() {
+    JsonDocument doc;
+
+    const bool ethUp = ETH.linkUp() && (ETH.localIP() != IPAddress(0,0,0,0));
+    IPAddress ip = ethUp ? ETH.localIP() : WiFi.localIP();
+
+    doc["ip"] = ip.toString();
+    doc["transport"] = ethUp ? "ETH" : "WIFI";
+    doc["mode"] = (WiFi.getMode() & WIFI_STA) ? "STA" : "AP";
+    doc["time_synced"] = timeSynced;
+
+    String out;
+    serializeJson(doc, out);
+    server.send(200, "application/json", out);
+}
+
+static bool ethBeginWithReset() {
+    Serial.println("[ETH] Starting Ethernet...");
+    Serial.println("[ETH] Initializing SPI...");
+    SPI.begin(ETH_SPI_SCK, ETH_SPI_MISO, ETH_SPI_MOSI);
+
+    pinMode(ETH_PHY_RST, OUTPUT);
+    digitalWrite(ETH_PHY_RST, LOW);
+    delay(100);
+    digitalWrite(ETH_PHY_RST, HIGH);
+    delay(200);
+
+    bool ret = ETH.begin(
+        ETH_PHY_W5500,
+        ETH_PHY_ADDR,
+        ETH_PHY_CS,
+        ETH_PHY_IRQ,
+        ETH_PHY_RST,
+        SPI);
+
+    Serial.printf("[ETH] ETH.begin returned: %s\n", ret ? "true" : "false");
+    return ret;
+}
+
+static bool ethWaitLinkAndIp(uint32_t timeoutMs) {
+    const uint32_t start = millis();
+    while (millis() - start < timeoutMs) {
+        if (ETH.linkUp() && (ETH.localIP() != IPAddress(0,0,0,0))) {
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    return false;
+}
+
+static void markEthDownStatus() {
+    g_wifiConnected = false;
+    g_wifiBars = 0;
+    g_wifiRssi = 0;
+    g_ft8ServerConnected = (wsServer.connectedClients() > 0);
+    g_ft8ServerActive = false;
+}
 
 // Send an FT8 CQ (or message)
 static void handleFt8Send() {
@@ -561,12 +621,6 @@ static void handleMemoryStats() {
     o["heap_min_free"]  = ESP.getMinFreeHeap();
     o["heap_max_alloc"] = ESP.getMaxAllocHeap();
 
-    // Internal 8-bit capable RAM only (excludes PSRAM)
-    o["internal_heap_total"]     = heap_caps_get_total_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    o["internal_heap_free"]      = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    o["internal_heap_min_free"]  = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    o["internal_heap_max_alloc"] = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-
     o["psram_total"] = ESP.getPsramSize();
     o["psram_free"]  = ESP.getFreePsram();
 
@@ -654,6 +708,11 @@ static void startWebServer() {
     server.on("/api/ft8/worked_dxcc", HTTP_GET, []() {
         server.send(200, "application/json", qsoStats.getJsonWorkedDXCC());
     });
+
+    server.on("/api/ft8/worked_callsign", HTTP_GET, []() {
+        server.send(200, "application/json", qsoStats.getJsonWorkedCallsign());
+    });
+
 
     server.on("/api/ft8/qsos_dxcc", HTTP_GET, []() {
         server.send(200, "application/json", qsoStats.getJsonQSOsDXCC());
@@ -769,113 +828,295 @@ uint8_t wifiBarsFromRSSI(int rssi)
 }
 
 // ======== Network Task (Core 0) ========
-void NetworkTask(void* pvParameters) {
+// void NetworkTask(void* pvParameters) {
 
-    Serial.println("[ETH] Network task started on Core 0");
-    static bool ethConnected = false;
-    // Wait for UI startup
-    vTaskDelay(2000 / portTICK_PERIOD_MS);
+//     Serial.println("[ETH] Network task started on Core 0");
+//     static bool ethConnected = false;
+//     // Wait for UI startup
+//     vTaskDelay(2000 / portTICK_PERIOD_MS);
 
-    if(!heap_caps_check_integrity_all(true)) ets_printf("!!! Corrupted heap before WiFi.begin !!!\n");
+//     if(!heap_caps_check_integrity_all(true)) ets_printf("!!! Corrupted heap before WiFi.begin !!!\n");
     
-    // ---- Start Ethernet ----
-    Serial.println("[ETH] Starting Ethernet...");
-    Serial.println("Initializing SPI...");
-    SPI.begin(ETH_SPI_SCK, ETH_SPI_MISO, ETH_SPI_MOSI);
-    // Reset the Ethernet PHY
-    pinMode(ETH_PHY_RST, OUTPUT);
-    digitalWrite(ETH_PHY_RST, LOW);
-    delay(100);
-    digitalWrite(ETH_PHY_RST, HIGH);
-    delay(200);
+//     // ---- Start Ethernet ----
+//     Serial.println("[ETH] Starting Ethernet...");
+//     Serial.println("Initializing SPI...");
+//     SPI.begin(ETH_SPI_SCK, ETH_SPI_MISO, ETH_SPI_MOSI);
+//     // Reset the Ethernet PHY
+//     pinMode(ETH_PHY_RST, OUTPUT);
+//     digitalWrite(ETH_PHY_RST, LOW);
+//     delay(100);
+//     digitalWrite(ETH_PHY_RST, HIGH);
+//     delay(200);
 
-    Serial.println("Initializing Ethernet...");
+//     Serial.println("Initializing Ethernet...");
       
-    bool ret = ETH.begin(
-      ETH_PHY_W5500,        //           ETH_PHY_TYPE,
-      ETH_PHY_ADDR,
-      ETH_PHY_CS,
-      ETH_PHY_IRQ,
-      ETH_PHY_RST,
-      SPI);
+//     bool ret = ETH.begin(
+//       ETH_PHY_W5500,        //           ETH_PHY_TYPE,
+//       ETH_PHY_ADDR,
+//       ETH_PHY_CS,
+//       ETH_PHY_IRQ,
+//       ETH_PHY_RST,
+//       SPI);
 
-  Serial.printf("ETH.begin returned: %s\n",
-                ret ? "true" : "false");
+//   Serial.printf("ETH.begin returned: %s\n",
+//                 ret ? "true" : "false");
  
-    // Wait for link + IP
-    while (!ETH.linkUp() || ETH.localIP() == IPAddress(0,0,0,0)) {
-        vTaskDelay(500 / portTICK_PERIOD_MS);
-        Serial.print(".");
+//     // Wait for link + IP
+//     while (!ETH.linkUp() || ETH.localIP() == IPAddress(0,0,0,0)) {
+//         vTaskDelay(500 / portTICK_PERIOD_MS);
+//         Serial.print(".");
+//     }
+
+//     Serial.printf("[ETH] Connected, IP=%s\n",
+//                   ETH.localIP().toString().c_str());
+
+//     ethConnected = true;
+
+
+//     // ---- Setup time, mDNS, WebSocket server ----
+//     setup_time_once();
+//     startWebServer();
+
+//     // Start mDNS responder
+//     if (!MDNS.begin(ui_get_ws_server_host())) {
+//         Serial.println("Error starting mDNS");
+//     }else
+//         Serial.printf("mDNS started: %s.local\n", ui_get_ws_server_host());
+
+
+//     auto* p = static_cast<TaskProfiler*>(pvParameters);
+   
+//     // Start WebSocket server
+//     startWebSocketServer();
+
+//     // ---- Main loop ----
+//     for(;;) {
+//        uint64_t t0 = esp_timer_get_time();
+        
+//          // ---- HTTP server ----
+//         if (webServerStarted)
+//             server.handleClient();
+
+//         // ---- WebSocket server ----
+//         wsServer.loop();
+
+//         // ---- Ethernet reconnect handling ----
+//         bool link = ETH.linkUp();
+
+//         if (!link && ethConnected) {
+
+//             Serial.println("[ETH] Link lost");
+//             ethConnected = false;
+//             g_wifiConnected = false;
+//             g_wifiBars = 0;
+//             g_wifiRssi = 0;
+//             g_ft8ServerConnected = (wsServer.connectedClients() > 0);
+//             g_ft8ServerActive = false;
+//         }
+
+//         if (link && !ethConnected) {
+
+//             Serial.println("[ETH] Link restored");
+
+//             // Wait for DHCP if needed
+//             while (ETH.localIP() == IPAddress(0,0,0,0)) {
+//                 vTaskDelay(100 / portTICK_PERIOD_MS);
+//             }
+
+//             Serial.printf("[ETH] IP=%s\n",
+//                           ETH.localIP().toString().c_str());
+
+//             setup_time_once();
+
+//             if (!webServerStarted)
+//                 startWebServer();
+
+//             if (!wsServerStarted)
+//                 startWebSocketServer();
+
+//             ethConnected = true;
+//         }
+
+//         // ---- Send audio to websocket ----
+//         AudioFrame* framePtr;
+//         uint8_t sentAudioFrames = 0;
+//         while (sentAudioFrames < AUDIO_FRAMES_PER_LOOP_MAX &&
+//                xQueueReceive(audioQueue, &framePtr, 0) == pdTRUE) {
+
+//             if (wsServer.connectedClients() > 0) {
+
+//                 uint8_t packet[16 + WS_AUDIO_BUF_SAMPLES * 2];
+
+//                 // timestamp
+//                 for (int i=0;i<8;i++)
+//                     packet[7-i] =
+//                         (framePtr->ts_ms >> (8*i)) & 0xFF;
+
+//                 // n_samples
+//                 for (int i=0;i<4;i++)
+//                     packet[8+3-i] =
+//                         (framePtr->n_samples >> (8*i)) & 0xFF;
+
+//                 // freq
+//                 for (int i=0;i<4;i++)
+//                     packet[12+3-i] =
+//                         (framePtr->freq_hz >> (8*i)) & 0xFF;
+
+//                 size_t samplesToCopy =
+//                     min((uint16_t)framePtr->n_samples,
+//                         (uint16_t)WS_AUDIO_BUF_SAMPLES);
+
+//                 memcpy(packet + 16,
+//                        framePtr->samples,
+//                        samplesToCopy * 2);
+
+//                 wsServer.broadcastBIN(packet,
+//                            16 + samplesToCopy * 2);
+//             }
+
+//             xQueueSend(freeFrameQueue, &framePtr, 0);
+//             sentAudioFrames++;
+//         }
+
+//         // ---- Send ADIF to WebSocket clients ----
+//         if (wsServer.connectedClients() > 0) {
+
+//             AdifUploadItem adifItem;
+
+//             if (xQueueReceive(adifQueue,
+//                               &adifItem,
+//                               0) == pdTRUE) {
+
+//                 size_t len =
+//                     strnlen(adifItem.adif,
+//                             sizeof(adifItem.adif));
+
+//                 wsServer.broadcastTXT(adifItem.adif, len);
+//             }
+//         }
+
+//         // ---- get FT8 messages from the external ft8 decoder via websocket ----
+//         char ft8Msg[MAX_FT8_MSG];
+//         const uint8_t ft8Budget = (uxQueueMessagesWaiting(audioQueue) > 0)
+//                         ? FT8_MSGS_WHEN_AUDIO_PENDING
+//                         : FT8_MSGS_PER_LOOP_MAX;
+//         uint8_t processedFt8Msgs = 0;
+//         while (processedFt8Msgs < ft8Budget &&
+//                xQueueReceive(ft8Queue, ft8Msg, 0) == pdTRUE) {
+
+//             if(ui_get_ws_server_enabled()) {
+//                 addFt8SpotFromJson(ft8Msg);
+//             }
+            
+//             g_ft8LastRxMs = millis();
+//             processedFt8Msgs++;
+//         }
+
+//         // ---- Global network status ----
+//         g_wifiConnected = ETH.linkUp();
+
+//         // Ethernet has no RSSI
+//         g_wifiRssi = 0;
+//         g_wifiBars = ETH.linkUp() ? 5 : 0;
+
+//         // ---- FT8 activity timeout ----
+//         g_ft8ServerConnected = (wsServer.connectedClients() > 0);
+//         if (g_ft8ServerConnected) {
+//             g_ft8ServerActive =
+//                 (millis() - g_ft8LastRxMs) < 15000;
+//         } else {
+//             g_ft8ServerActive = false;
+//         }
+    
+//         // profiling
+//         p->busy_us += esp_timer_get_time() - t0;
+//         p->loops++;
+
+
+//         vTaskDelay(pdMS_TO_TICKS(2));
+//     }
+// }
+
+void NetworkTask(void* pvParameters) {
+    Serial.println("[ETH] Network task started on Core 0");
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    if(!heap_caps_check_integrity_all(true)) {
+        ets_printf("!!! Corrupted heap before ETH init !!!\n");
     }
 
-    Serial.printf("[ETH] Connected, IP=%s\n",
-                  ETH.localIP().toString().c_str());
+    auto* p = static_cast<TaskProfiler*>(pvParameters);
 
-    ethConnected = true;
+    static constexpr uint32_t ETH_IP_WAIT_MS = 8000;
+    static constexpr uint32_t ETH_REINIT_AFTER_DOWN_MS = 15000;
+    static constexpr uint32_t ETH_REINIT_COOLDOWN_MS = 5000;
 
+    bool ethConnected = false;
+    uint32_t ethDownSince = 0;
+    uint32_t lastReinitMs = 0;
 
-    // ---- Setup time, mDNS, WebSocket server ----
-    setup_time_once();
+    // Initial bring-up (bounded wait, no infinite block)
+    if (ethBeginWithReset() && ethWaitLinkAndIp(ETH_IP_WAIT_MS)) {
+        Serial.printf("[ETH] Connected, IP=%s\n", ETH.localIP().toString().c_str());
+        ethConnected = true;
+        setup_time_once();
+    } else {
+        Serial.println("[ETH] Initial link/IP not ready, entering reconnect loop");
+        markEthDownStatus();
+    }
+
     startWebServer();
-
-    // Start mDNS responder
     if (!MDNS.begin(ui_get_ws_server_host())) {
         Serial.println("Error starting mDNS");
-    }else
+    } else {
         Serial.printf("mDNS started: %s.local\n", ui_get_ws_server_host());
-
-
-    auto* p = static_cast<TaskProfiler*>(pvParameters);
-   
-    // Start WebSocket server
+    }
     startWebSocketServer();
 
-    // ---- Main loop ----
-    for(;;) {
-       uint64_t t0 = esp_timer_get_time();
-        
-         // ---- HTTP server ----
-        if (webServerStarted)
-            server.handleClient();
+    for (;;) {
+        uint64_t t0 = esp_timer_get_time();
 
-        // ---- WebSocket server ----
+        if (webServerStarted) server.handleClient();
         wsServer.loop();
 
-        // ---- Ethernet reconnect handling ----
-        bool link = ETH.linkUp();
+        const bool link = ETH.linkUp();
+        const bool hasIp = (ETH.localIP() != IPAddress(0,0,0,0));
+        const bool ethHealthy = link && hasIp;
 
-        if (!link && ethConnected) {
-
-            Serial.println("[ETH] Link lost");
-            ethConnected = false;
-            g_wifiConnected = false;
-            g_wifiBars = 0;
-            g_wifiRssi = 0;
-            g_ft8ServerConnected = (wsServer.connectedClients() > 0);
-            g_ft8ServerActive = false;
-        }
-
-        if (link && !ethConnected) {
-
-            Serial.println("[ETH] Link restored");
-
-            // Wait for DHCP if needed
-            while (ETH.localIP() == IPAddress(0,0,0,0)) {
-                vTaskDelay(100 / portTICK_PERIOD_MS);
+        if (ethHealthy) {
+            if (!ethConnected) {
+                Serial.printf("[ETH] Recovered, IP=%s\n", ETH.localIP().toString().c_str());
+                setup_time_once();
+                ethConnected = true;
+            }
+            ethDownSince = 0;
+        } else {
+            if (ethConnected) {
+                Serial.println("[ETH] Link/IP lost");
+                ethConnected = false;
+                markEthDownStatus();
             }
 
-            Serial.printf("[ETH] IP=%s\n",
-                          ETH.localIP().toString().c_str());
+            if (ethDownSince == 0) {
+                ethDownSince = millis();
+            }
 
-            setup_time_once();
+            const uint32_t now = millis();
+            if ((now - ethDownSince) >= ETH_REINIT_AFTER_DOWN_MS &&
+                (now - lastReinitMs) >= ETH_REINIT_COOLDOWN_MS) {
 
-            if (!webServerStarted)
-                startWebServer();
+                lastReinitMs = now;
+                Serial.println("[ETH] Reinitializing W5500...");
 
-            if (!wsServerStarted)
-                startWebSocketServer();
-
-            ethConnected = true;
+                if (ethBeginWithReset() && ethWaitLinkAndIp(ETH_IP_WAIT_MS)) {
+                    Serial.printf("[ETH] Reinit OK, IP=%s\n", ETH.localIP().toString().c_str());
+                    setup_time_once();
+                    ethConnected = true;
+                    ethDownSince = 0;
+                } else {
+                    Serial.println("[ETH] Reinit failed, will retry");
+                }
+            }
         }
 
         // ---- Send audio to websocket ----
@@ -885,34 +1126,15 @@ void NetworkTask(void* pvParameters) {
                xQueueReceive(audioQueue, &framePtr, 0) == pdTRUE) {
 
             if (wsServer.connectedClients() > 0) {
-
                 uint8_t packet[16 + WS_AUDIO_BUF_SAMPLES * 2];
 
-                // timestamp
-                for (int i=0;i<8;i++)
-                    packet[7-i] =
-                        (framePtr->ts_ms >> (8*i)) & 0xFF;
+                for (int i = 0; i < 8; i++) packet[7 - i] = (framePtr->ts_ms >> (8 * i)) & 0xFF;
+                for (int i = 0; i < 4; i++) packet[8 + 3 - i] = (framePtr->n_samples >> (8 * i)) & 0xFF;
+                for (int i = 0; i < 4; i++) packet[12 + 3 - i] = (framePtr->freq_hz >> (8 * i)) & 0xFF;
 
-                // n_samples
-                for (int i=0;i<4;i++)
-                    packet[8+3-i] =
-                        (framePtr->n_samples >> (8*i)) & 0xFF;
-
-                // freq
-                for (int i=0;i<4;i++)
-                    packet[12+3-i] =
-                        (framePtr->freq_hz >> (8*i)) & 0xFF;
-
-                size_t samplesToCopy =
-                    min((uint16_t)framePtr->n_samples,
-                        (uint16_t)WS_AUDIO_BUF_SAMPLES);
-
-                memcpy(packet + 16,
-                       framePtr->samples,
-                       samplesToCopy * 2);
-
-                wsServer.broadcastBIN(packet,
-                           16 + samplesToCopy * 2);
+                size_t samplesToCopy = min((uint16_t)framePtr->n_samples, (uint16_t)WS_AUDIO_BUF_SAMPLES);
+                memcpy(packet + 16, framePtr->samples, samplesToCopy * 2);
+                wsServer.broadcastBIN(packet, 16 + samplesToCopy * 2);
             }
 
             xQueueSend(freeFrameQueue, &framePtr, 0);
@@ -921,58 +1143,42 @@ void NetworkTask(void* pvParameters) {
 
         // ---- Send ADIF to WebSocket clients ----
         if (wsServer.connectedClients() > 0) {
-
             AdifUploadItem adifItem;
-
-            if (xQueueReceive(adifQueue,
-                              &adifItem,
-                              0) == pdTRUE) {
-
-                size_t len =
-                    strnlen(adifItem.adif,
-                            sizeof(adifItem.adif));
-
+            if (xQueueReceive(adifQueue, &adifItem, 0) == pdTRUE) {
+                size_t len = strnlen(adifItem.adif, sizeof(adifItem.adif));
                 wsServer.broadcastTXT(adifItem.adif, len);
             }
         }
 
-        // ---- get FT8 messages from the external ft8 decoder via websocket ----
+        // ---- FT8 messages from decoder websocket ----
         char ft8Msg[MAX_FT8_MSG];
         const uint8_t ft8Budget = (uxQueueMessagesWaiting(audioQueue) > 0)
-                        ? FT8_MSGS_WHEN_AUDIO_PENDING
-                        : FT8_MSGS_PER_LOOP_MAX;
+                                    ? FT8_MSGS_WHEN_AUDIO_PENDING
+                                    : FT8_MSGS_PER_LOOP_MAX;
         uint8_t processedFt8Msgs = 0;
         while (processedFt8Msgs < ft8Budget &&
                xQueueReceive(ft8Queue, ft8Msg, 0) == pdTRUE) {
-
-            if(ui_get_ws_server_enabled()) {
+            if (ui_get_ws_server_enabled()) {
                 addFt8SpotFromJson(ft8Msg);
             }
-            
             g_ft8LastRxMs = millis();
             processedFt8Msgs++;
         }
 
         // ---- Global network status ----
-        g_wifiConnected = ETH.linkUp();
-
-        // Ethernet has no RSSI
+        g_wifiConnected = ethHealthy;
         g_wifiRssi = 0;
-        g_wifiBars = ETH.linkUp() ? 5 : 0;
+        g_wifiBars = ethHealthy ? 5 : 0;
 
-        // ---- FT8 activity timeout ----
         g_ft8ServerConnected = (wsServer.connectedClients() > 0);
         if (g_ft8ServerConnected) {
-            g_ft8ServerActive =
-                (millis() - g_ft8LastRxMs) < 15000;
+            g_ft8ServerActive = (millis() - g_ft8LastRxMs) < 15000;
         } else {
             g_ft8ServerActive = false;
         }
-    
-        // profiling
+
         p->busy_us += esp_timer_get_time() - t0;
         p->loops++;
-
 
         vTaskDelay(pdMS_TO_TICKS(2));
     }
@@ -1228,7 +1434,7 @@ void wifi_config_setup() {
     if(ft8Queue == NULL) ft8Queue = xQueueCreate(8,  MAX_FT8_MSG);
 
     Serial.printf("Start network task on Core 0\n");
-    xTaskCreatePinnedToCore(NetworkTask, "NET", 36000, &profilers[0], 3, NULL, 0); 
+    xTaskCreatePinnedToCore(NetworkTask, "NET", 36000, &profilers[0], 1, NULL, 0); 
 }
 
 // ===== Audio Push =====
