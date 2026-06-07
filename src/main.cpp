@@ -257,7 +257,8 @@ static void processAudioPCM1808() {
           peakWarn(peakWebAudio) ||
           peakWarn(peakAudioOut);
 
-        if (alert || warn) {
+        if ( (alert || warn) && !transmitting) {
+
 
           Serial.printf(
             "[PEAK %s] IQ I=%5d Q=%5d | Aud=%5d | WS=%5d | OUT=%5d\n",

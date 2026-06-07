@@ -14,12 +14,14 @@
 #include "ft8_types.h"
 #include "qso_manager.h"
 #include "ft8_freq_opt.h"
+#include "qsostats.h"
 
 extern uint8_t audioVolume; // declared in main.cpp, used here to mute audio during TX
 extern bool transmitting; // declared in main.cpp, used here to track if we are currently transmitting
 extern AntennaFilters *antFilters; // declared in main.cpp, used here to control TX/RX relay and antenna filters
 extern QSOManager qsoManager; // declared in wifi_config.cpp, used here to manage QSOs and generate replies
 extern FT8FreqOptimizer ft8FreqOptimizer; // declared in main.cpp
+extern QSOStats qsoStats; // declared in wifi_config.cpp
 
 std::vector<FT8_TX::TxJob> txJobs;
 uint32_t nextJobId = 1;
@@ -60,6 +62,10 @@ bool FT8_TX::encodeMessage(const char *msg) {
 // ----------------- SLOT PARITY CALCULATION ----------------
 uint8_t getSlotParity(struct tm &t) {
     return ((t.tm_sec / 15) % 2); // 0 even, 1 odd
+}
+
+uint8_t getSlotParity(uint32_t seconds) {
+    return ((seconds / 15) % 2); // 0 even, 1 odd
 }
 
 // ---------------- REQUEST TX ----------------
@@ -207,23 +213,9 @@ const uint32_t symbolPeriodUs = 160000;
 void FT8_TX::taskLoop() {
 
     while (true) {
-
+        
         // --------------------------------------------------------
-        // 1) Compute timing
-        // --------------------------------------------------------
-        int64_t nowMs = getNowMs();
-        int64_t slot = nowMs / 15000LL;
-        int64_t nextSlotMs = (slot + 1) * 15000LL;
-
-        // wake ~500 ms before slot boundary
-        int64_t wakeTime = nextSlotMs - 500;
-
-        while (getNowMs() < wakeTime) {
-            vTaskDelay(1);
-        }
-
-        // --------------------------------------------------------
-        // 2) Drain queue → create jobs
+        // 1) Drain queue → create jobs
         // --------------------------------------------------------
         TxRequest req;
         while (xQueueReceive(txQueue, &req, 0) == pdTRUE) {
@@ -237,6 +229,21 @@ void FT8_TX::taskLoop() {
                         job.id, job.qso_id, job.parity, job.message);
         }
 
+        // --------------------------------------------------------
+        // 2) Compute timing
+        // --------------------------------------------------------
+        int64_t nowMs = getNowMs();
+        int64_t slot = nowMs / 15000LL;
+        int64_t nextSlotMs = (slot + 1) * 15000LL;
+
+        // wake ~500 ms before slot boundary
+        int64_t wakeTime = nextSlotMs - 500;
+
+        if (getNowMs() < wakeTime) {
+            vTaskDelay(1);
+            continue;
+        }
+        
         if(ui_get_ft8_offset_enabled()) {
             // get the calculated ft8 offset
             uint16_t bestFt8Offset = 
@@ -258,7 +265,7 @@ void FT8_TX::taskLoop() {
 
             // not yet time → skip
             if (j.targetSlot > currentSlot + 1){
-                Serial.printf("[FT8] job id=%u not eligible yet (targetSlot=%lld currentSlot=%lld), skipping\n", j.id, j.targetSlot, currentSlot);
+                // Serial.printf("[FT8] job id=%u not eligible yet (targetSlot=%lld currentSlot=%lld), skipping\n", j.id, j.targetSlot, currentSlot);
                 continue;
 
             } 
@@ -383,10 +390,10 @@ void FT8_TX::taskLoop() {
 
                 best->cancelled = true;
 
-            } else if (best->retryCount >= qsoManager.MAX_RETRIES) {
+            } else if (best->retryCount >= ui_get_ft8_max_retries()) {
 
                 best->cancelled = true;
-                Serial.printf("[FT8] retry job %u MAX_RETRIES reached\n", best->id);
+                Serial.printf("[FT8] retry job %u MAX_RETRIES (%d) reached\n", best->id, ui_get_ft8_max_retries());
             } else {
 
                 best->retryCount++;
@@ -409,6 +416,51 @@ void FT8_TX::taskLoop() {
             // No TX this slot
             // Serial.printf("[FT8] idle slot\n");
         }
+
+        // --------------------------------------------------------
+        // 7) Answer a CQ if:
+        //       FT8 auto call is enabled, 
+        //       we are not currently transmitting 
+        //       and there are no pending jobs
+        // --------------------------------------------------------
+        if(ui_get_ft8_mode() == FT8_MODE_AUTO_CALL){
+            bool pendingJobs = false;
+            for (auto &q : qsoManager.qso_list) {
+                TxJob * job = getNextPendingJob(q.qso_id); // check if there are pending jobs for this QSO to avoid replying to a CQ if we have already replied and are waiting for a response
+                if (job) {
+                    pendingJobs = true;
+                }
+            }
+            if(! pendingJobs ) {
+                // get the most scored CQ
+                QSO * bestCQ = nullptr;
+                float bestScore = -9999;
+                uint32_t now_epoch = (uint32_t)time(nullptr);
+                for (auto &q : qsoManager.qso_list) {
+                    if (q.cq && !q.is_mine && q.state == QSO_CQ) {
+                        float score = qsoStats.scoreCQ(q.call1, q.grid1, q.dxcc1, q.snr1, ui_get_vfo_freq(), now_epoch);
+                        q.score1 = score;
+                        //  Serial.printf("[FT8] To get best score, examining CQ from %s with score %.1f against bestScore %.1f\n", q.call1, score, bestScore);   
+                        if (score > bestScore) {
+                            bestCQ = &q;
+                            bestScore = score;
+                        }
+                    }
+                }
+            
+                if (bestCQ ) {
+                    // generate a reply for it
+                    String reply = String(bestCQ->call1) + " " + ui_get_mycall() + " " + ui_get_mygrid(); // TODO: generate proper report and consider using a different message type for the reply
+
+                    if (reply.length() > 0) {
+                        uint8_t parity = getSlotParity(bestCQ->lastHeard);
+                        Serial.printf("[FT8] Auto-replying to CQ from %s with: %s parity=%d\n", 
+                            bestCQ->call1, reply.c_str(), !parity );
+                        requestTransmission(ui_get_vfo_freq() + ui_get_ft8_offset(), reply.c_str(), MSG_CALL, !parity, bestCQ->qso_id);
+                    }
+                }
+            }
+        }    
     }
 }
 

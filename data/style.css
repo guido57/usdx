@@ -198,6 +198,30 @@ tr:hover {
   gap: 5px;
 }
 
+#ft8 .ft8-row {
+  column-gap: 28px;
+  row-gap: 8px;
+}
+
+#ft8 .ft8-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#ft8 .ft8-field label {
+  flex: none;
+  white-space: nowrap;
+}
+
+#ft8 .ft8-field input[type="number"] {
+  width: 80px;
+}
+
+#ft8 .ft8-field input[type="text"] {
+  width: 210px;
+}
+
 .cq-row {
   background-color: #fff3a0;
 }
