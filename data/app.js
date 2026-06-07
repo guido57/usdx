@@ -771,7 +771,19 @@ function syncFt8FromUi() {
     if (testMsgInput && ft8TestMsg) {
         ft8TestMsg.value = testMsgInput.value || '';
     }
-}
+
+    const modeInput = document.querySelector('input[name="ft8_mode"]');
+    if (modeInput && ft8Mode)
+        ft8Mode.selectedIndex = parseInt(modeInput.value) || 0;
+
+    const retriesInput = document.querySelector('input[name="ft8_max_retries"]');
+    if (retriesInput && ft8MaxRetries)
+        ft8MaxRetries.selectedIndex = parseInt(retriesInput.value) || 0;
+
+    const parityInput = document.querySelector('input[name="ft8_parity"]');
+    if (parityInput && ft8SendParity)
+        ft8SendParity.selectedIndex = parseInt(parityInput.value) || 0;
+  }
 
 // Fetch UI
 async function fetchUi(){
@@ -806,6 +818,9 @@ const ft8Offset = document.getElementById('ft8-offset');
 const ft8AutoOffset = document.getElementById("ft8-auto-offset");
 const ft8TestMsg = document.getElementById('ft8-testmsg');
 const mycall = document.getElementById('mycall');
+const ft8Mode = document.getElementById('ft8-mode');
+const ft8MaxRetries = document.getElementById('ft8-max-retries');
+const ft8SendParity = document.getElementById('ft8-parity');
 
 async function init() {
     await fetchUi(); // Wait for the UI to be built from the API
@@ -932,6 +947,18 @@ ft8AutoOffset?.addEventListener('change', (e) => {
 // For the FT8 Test Message input
 ft8TestMsg?.addEventListener('change', (e) => {
     syncAndSave(e.target, 'ft8_testmsg');
+});
+
+ft8Mode?.addEventListener('change', e => {
+    syncAndSave(e.target, 'ft8_mode');
+});
+
+ft8MaxRetries?.addEventListener('change', e => {
+    syncAndSave(e.target, 'ft8_max_retries');
+});
+
+ft8SendParity?.addEventListener('change', e => {
+    syncAndSave(e.target, 'ft8_send_parity');
 });
 
 // FT8 QSOs
@@ -1190,7 +1217,7 @@ function addQsoRow(qso){
       <td>${geo1.flag}</td>
       <td>${qso.snr1 === -128 ? '' : qso.snr1}</td>
       <td>${qso.report1 || ''}</td>
-      <td>${qso.score1 || ''}</td>
+      <td>${qso.score1 ? qso.score1.toFixed(1) : ''}</td>      
       <td>${qso.call2}</td>
       <td>${qso.grid2 || ''}</td>
       <td>${geo2.distance || ''}</td>
@@ -1198,7 +1225,7 @@ function addQsoRow(qso){
       <td>${geo2.flag}</td>
       <td>${qso.snr2 === -128 ? '' : qso.snr2}</td>
       <td>${qso.report2 || ''}</td>
-      <td>${qso.score2 || ''}</td>
+      <td>${qso.score2 ? qso.score2.toFixed(1) : ''}</td>      
       <td>${formatQsoState(qso.state)}</td>
       <td>${renderTxCell(qso)}</td>
       <td>${durationStr}</td>
