@@ -20,7 +20,7 @@ This project implements a full **IQ SDR receiver** and **FT8 transceiver** on an
 - **Web Server** for remote operations over Wi-Fi or Ethernet
 - Automatic **antenna filter selection** via MCP23017 GPIO
 - **FT8 TX and RX support** with frequency optimization
-- **FT8 embedded coding and decoding** using my library [](https://github.com/guido57/ESP32_ft8_lib) 
+- **FT8 embedded coding and decoding** using my library https://github.com/guido57/ESP32_ft8_lib
 
 ---
 
