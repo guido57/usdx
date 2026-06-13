@@ -100,6 +100,37 @@ static const uint8_t  AUDIO_FRAMES_PER_LOOP_MAX = 3;
 
 QSOManager qsoManager;
 
+enum NetSectionIdx : uint8_t {
+    NS_HTTP = 0,
+    NS_WS_LOOP,
+    NS_ETH_HEALTH,
+    NS_AUDIO_TX,
+    NS_ADIF_TX,
+    NS_FT8_RX,
+    NS_STATUS,
+    NS_SLEEP,
+    NS_COUNT
+};
+
+static const char* kNetSectionNames[NS_COUNT] = {
+    "http",
+    "ws_loop",
+    "eth_health",
+    "audio_tx",
+    "adif_tx",
+    "ft8_rx",
+    "status",
+    "sleep"
+};
+
+static uint64_t g_netSectionBusyUs[NS_COUNT] = {0};
+static uint32_t g_netSectionHits[NS_COUNT] = {0};
+
+static inline void netSectionAdd(NetSectionIdx idx, uint64_t deltaUs) {
+    g_netSectionBusyUs[idx] += deltaUs;
+    g_netSectionHits[idx] += 1;
+}
+
 // ===== Helpers =====
 
 static void loadCredentials() {
@@ -654,6 +685,25 @@ static void handleMemoryStats() {
         obj["busy_us"] = busy;
         obj["busy_avg_us"] = loops ? busy / loops : 0;
     }
+
+    JsonArray netArr = o["network_sections"].to<JsonArray>();
+    uint64_t secBusy[NS_COUNT];
+    uint32_t secHits[NS_COUNT];
+    for (uint8_t i = 0; i < NS_COUNT; i++) {
+        secBusy[i] = g_netSectionBusyUs[i];
+        secHits[i] = g_netSectionHits[i];
+        g_netSectionBusyUs[i] = 0;
+        g_netSectionHits[i] = 0;
+    }
+
+    for (uint8_t i = 0; i < NS_COUNT; i++) {
+        JsonObject obj = netArr.add<JsonObject>();
+        obj["name"] = kNetSectionNames[i];
+        obj["cpu_perc"] = interval_us > 0 ? (100.0 * secBusy[i] / interval_us) : 0;
+        obj["hits"] = secHits[i];
+        obj["busy_us"] = secBusy[i];
+        obj["busy_avg_us"] = secHits[i] ? (secBusy[i] / secHits[i]) : 0;
+    }
     
     String out;
     serializeJson(doc, out);
@@ -694,7 +744,7 @@ static void startWebServer() {
     server.on("/api/ft8/call",   HTTP_POST, handleFt8Call);
 
     server.on("/api/ft8/qsos", HTTP_GET, []() {
-      server.send(200, "application/json", qsoManager.getAllQSOsJson());
+      qsoManager.streamAllQSOsJson(server);
     });
 
     server.on("/api/ft8/qsos/active", HTTP_GET, []() {
@@ -804,7 +854,8 @@ static void addFt8SpotFromJson(const char* json)
             doc["mode"] | "FT8",
             sizeof(spot.mode));
 
-    spot.freq_hz  = doc["frequency_hz"] | 0;
+    spot.freq_hz  = doc["freq_hz"] | 0;
+    spot.freq_hz += ui_get_vfo_freq();
     spot.snr_db   = doc["snr_db"] | INT8_MIN; // use INT8_MIN to indicate missing SNR
     spot.timestamp = doc["timestamp"] | (utc_ms()/1000);
 
@@ -1075,10 +1126,17 @@ void NetworkTask(void* pvParameters) {
 
     for (;;) {
         uint64_t t0 = esp_timer_get_time();
+        uint64_t ts;
 
+        ts = esp_timer_get_time();
         if (webServerStarted) server.handleClient();
-        wsServer.loop();
+        netSectionAdd(NS_HTTP, esp_timer_get_time() - ts);
 
+        ts = esp_timer_get_time();
+        wsServer.loop();
+        netSectionAdd(NS_WS_LOOP, esp_timer_get_time() - ts);
+
+        ts = esp_timer_get_time();
         const bool link = ETH.linkUp();
         const bool hasIp = (ETH.localIP() != IPAddress(0,0,0,0));
         const bool ethHealthy = link && hasIp;
@@ -1118,11 +1176,16 @@ void NetworkTask(void* pvParameters) {
                 }
             }
         }
+        netSectionAdd(NS_ETH_HEALTH, esp_timer_get_time() - ts);
 
         // ---- Send audio to websocket ----
+        ts = esp_timer_get_time();
         AudioFrame* framePtr;
         uint8_t sentAudioFrames = 0;
-        while (sentAudioFrames < AUDIO_FRAMES_PER_LOOP_MAX &&
+        static constexpr uint64_t AUDIO_BROADCAST_TIMEOUT_US = 500000ULL; // 500 ms
+        bool audioStalled = false;
+        while (!audioStalled &&
+               sentAudioFrames < AUDIO_FRAMES_PER_LOOP_MAX &&
                xQueueReceive(audioQueue, &framePtr, 0) == pdTRUE) {
 
             if (wsServer.connectedClients() > 0) {
@@ -1134,14 +1197,34 @@ void NetworkTask(void* pvParameters) {
 
                 size_t samplesToCopy = min((uint16_t)framePtr->n_samples, (uint16_t)WS_AUDIO_BUF_SAMPLES);
                 memcpy(packet + 16, framePtr->samples, samplesToCopy * 2);
+
+                uint64_t sendStart = esp_timer_get_time();
                 wsServer.broadcastBIN(packet, 16 + samplesToCopy * 2);
+                uint64_t sendUs = esp_timer_get_time() - sendStart;
+
+                if (sendUs > AUDIO_BROADCAST_TIMEOUT_US) {
+                    Serial.printf("[Audio] broadcastBIN stalled %llu us — disconnecting all WS clients\n", sendUs);
+                    // Forcibly kill all stalled WS clients
+                    for (uint8_t ci = 0; ci < WEBSOCKETS_SERVER_CLIENT_MAX; ci++) {
+                        wsServer.disconnect(ci);
+                    }
+                    // Drain remaining audio frames so queue doesn't pile up
+                    xQueueSend(freeFrameQueue, &framePtr, 0);
+                    while (xQueueReceive(audioQueue, &framePtr, 0) == pdTRUE) {
+                        xQueueSend(freeFrameQueue, &framePtr, 0);
+                    }
+                    audioStalled = true;
+                    continue; // skip the free below, already returned
+                }
             }
 
             xQueueSend(freeFrameQueue, &framePtr, 0);
             sentAudioFrames++;
         }
+        netSectionAdd(NS_AUDIO_TX, esp_timer_get_time() - ts);
 
         // ---- Send ADIF to WebSocket clients ----
+        ts = esp_timer_get_time();
         if (wsServer.connectedClients() > 0) {
             AdifUploadItem adifItem;
             if (xQueueReceive(adifQueue, &adifItem, 0) == pdTRUE) {
@@ -1149,8 +1232,10 @@ void NetworkTask(void* pvParameters) {
                 wsServer.broadcastTXT(adifItem.adif, len);
             }
         }
+        netSectionAdd(NS_ADIF_TX, esp_timer_get_time() - ts);
 
         // ---- FT8 messages from decoder websocket ----
+        ts = esp_timer_get_time();
         char ft8Msg[MAX_FT8_MSG];
         const uint8_t ft8Budget = (uxQueueMessagesWaiting(audioQueue) > 0)
                                     ? FT8_MSGS_WHEN_AUDIO_PENDING
@@ -1164,8 +1249,10 @@ void NetworkTask(void* pvParameters) {
             g_ft8LastRxMs = millis();
             processedFt8Msgs++;
         }
+        netSectionAdd(NS_FT8_RX, esp_timer_get_time() - ts);
 
         // ---- Global network status ----
+        ts = esp_timer_get_time();
         g_wifiConnected = ethHealthy;
         g_wifiRssi = 0;
         g_wifiBars = ethHealthy ? 5 : 0;
@@ -1176,11 +1263,14 @@ void NetworkTask(void* pvParameters) {
         } else {
             g_ft8ServerActive = false;
         }
+        netSectionAdd(NS_STATUS, esp_timer_get_time() - ts);
 
         p->busy_us += esp_timer_get_time() - t0;
         p->loops++;
 
+        ts = esp_timer_get_time();
         vTaskDelay(pdMS_TO_TICKS(2));
+        netSectionAdd(NS_SLEEP, esp_timer_get_time() - ts);
     }
 }
 

@@ -50,7 +50,8 @@ extern "C" void ft8_on_message_decoded(const char* phase,
     strlcpy(spot.receiver_callsign, (mycall != nullptr) ? mycall : "", sizeof(spot.receiver_callsign));
     strlcpy(spot.receiver_grid, (mygrid != nullptr) ? mygrid : "", sizeof(spot.receiver_grid));
 
-    float full_freq_hz = 1.0e6f * base_freq_mhz + msg->freq_hz;
+    // float full_freq_hz = 1.0e6f * base_freq_mhz + msg->freq_hz;
+    float full_freq_hz = ui_get_vfo_freq() + msg->freq_hz;
     if (full_freq_hz < 0.0f) {
         full_freq_hz = 0.0f;
     }
