@@ -306,6 +306,7 @@ void QSOManager::streamAllQSOsJson(WebServer &server) {
     uint32_t vfo_freq = ui_get_vfo_freq();
     uint32_t now_epoch = (uint32_t)time(nullptr);
 
+    server.sendHeader("Connection", "close");
     server.setContentLength(CONTENT_LENGTH_UNKNOWN);
     server.send(200, "application/json", "[");
 
@@ -314,6 +315,10 @@ void QSOManager::streamAllQSOsJson(WebServer &server) {
     size_t skippedCount = 0;
 
     for (auto it = snapshot.rbegin(); it != snapshot.rend(); ++it) {
+        if (!server.client().connected()) {
+            break;
+        }
+
         QSO &q = *it;
 
         JsonDocument qdoc;
@@ -412,7 +417,12 @@ void QSOManager::streamAllQSOsJson(WebServer &server) {
         // Write the object in small pieces so the NET task does not block long enough
         // to starve IDLE0 when the TCP stack applies backpressure.
         static constexpr size_t STREAM_CHUNK = 128U;
-        for (size_t offset = 0; offset < serializedLen; offset += STREAM_CHUNK) {
+        bool clientGone = !server.client().connected();
+        for (size_t offset = 0; !clientGone && offset < serializedLen; offset += STREAM_CHUNK) {
+            if (!server.client().connected()) {
+                clientGone = true;
+                break;
+            }
             size_t chunkLen = serializedLen - offset;
             if (chunkLen > STREAM_CHUNK) {
                 chunkLen = STREAM_CHUNK;
@@ -423,6 +433,9 @@ void QSOManager::streamAllQSOsJson(WebServer &server) {
             }
         }
         free(item);
+        if (clientGone) {
+            break;
+        }
         first = false;
         sentCount++;
 
@@ -433,6 +446,7 @@ void QSOManager::streamAllQSOsJson(WebServer &server) {
     }
 
     server.sendContent("]");
+    server.sendContent("");
 
     if (skippedCount > 0) {
         Serial.printf("streamAllQSOsJson: sent %u/%u objects, skipped=%u\n",
@@ -903,6 +917,8 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
     if (f.hasReport) {
         strlcpy(psk_spot.report, f.report, sizeof(psk_spot.report));
     }
+
+    // Serial.println("Sending PSKReporter spot: freq=" + String(psk_spot.freq_hz) + " snr_db=" + String(psk_spot.snr_db) + " callsign=" + String(psk_spot.callsign) + " grid=" + String(psk_spot.grid) + " report=" + String(psk_spot.report) );
     send_pskreporter_packet(psk_spot);
 
     // generate the appropriate reply message based on the message type and extracted fields (maybe to move ahead)
@@ -953,13 +969,15 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
     // reduce the list size if needed (remove oldest non-"mine" first)
     // --------------------------------------------------------
     // delete CQs oldest than 5 minutes, they are probably stale and will never be replied (but only if they are not "mine", otherwise we risk deleting a CQ for which we are still waiting for a reply and for which we have pending transmission jobs)
-    for (auto it = qso_list.begin(); it != qso_list.end(); ++it) {
+    for (auto it = qso_list.begin(); it != qso_list.end(); ) {
         FT8_TX::TxJob * pending_jobs = ft8tx.getNextPendingJob(it->qso_id);
         long ageSec = (timestamp - it->firstSeen);
         // Serial.printf("Checking if I can remove QSO %d with age %lu seconds, state %d, pending job: %s\r\n", it->qso_id, ageSec, it->state, pending_jobs ? "YES" : "NO");   
-        if (it->state == QSO_CQ && pending_jobs == nullptr && ageSec > 300) {
-            Serial.printf("Removing oldest %lu mine QSO with no pending job %d\n", ageSec, it->qso_id);
-            qso_list.erase(it);
+        if (it->state < QSO_DONE && pending_jobs == nullptr && ageSec > 300) {
+            Serial.printf("Removing oldest (%lu secs) QSO %d with no pending job\n", ageSec, it->qso_id);
+            it = qso_list.erase(it);
+        } else {
+            ++it;
         }
     }
 
@@ -968,15 +986,15 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
         lockQsoList();
         bool removed = false;
         
-        for (auto it = qso_list.begin(); it != qso_list.end(); ++it) {
-            FT8_TX::TxJob * pending_jobs = ft8tx.getNextPendingJob(it->qso_id);
-            if (it->is_mine && it->state < QSO_DONE && pending_jobs == nullptr ) {
-                Serial.printf("Removing oldest mine QSO with no pending job %d\n", it->qso_id);
-                qso_list.erase(it);
-                removed = true;
-                break;
-            }
-        }
+        // for (auto it = qso_list.begin(); it != qso_list.end(); ++it) {
+        //     FT8_TX::TxJob * pending_jobs = ft8tx.getNextPendingJob(it->qso_id);
+        //     if (it->is_mine && it->state < QSO_DONE && pending_jobs == nullptr ) {
+        //         Serial.printf("Removing oldest mine QSO with no pending job %d\n", it->qso_id);
+        //         qso_list.erase(it);
+        //         removed = true;
+        //         break;
+        //     }
+        // }
 
         // fallback: if it removed nothing, remove oldest not mine, excluding CQ
         if (!removed) {
@@ -1009,85 +1027,112 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
     }
 }
 
-QSO* QSOManager::getQSOByFields(Ft8Fields &f) {
-
-    if (!f.hasCall1 || !f.call1 || strcmp(f.call1, "") == 0) {
-        Serial.println("getQSOByFields: call1 is missing or empty, cannot find matching QSO");
-        return nullptr;
-    }
-   
-    const char* a = f.call1;
-    const char* b = (f.hasCall2 && f.call2) ? f.call2 : ""; // normalize call2
-
-    for (auto &q : qso_list) {
-
-        if (!q.call1) continue; // sanity check, should not happen
-        if(q.state == QSO_DONE) continue; // if the QSO is already completed we skip it, we want to match only ongoing QSOs (in CQ, CALLING, REPLYING states), 
-                                          // otherwise we risk matching completed QSOs for which we are just receiving new CQ messages 
-                                          // (e.g. from a station calling CQ again after completing a QSO with me, or from a station calling CQ 
-                                          // that I tried to call but got no reply and then it called CQ again, etc..    )
-        const char* qc1 = q.call1;
-        const char* qc2 = (q.call2 && strlen(q.call2) > 0) ? q.call2 : ""; // normalize call2
-
-        if(f.type <= MSG_CQ_TEST){
-             // For CQ messages we want to match on call1 only
-            if (strcmp(qc1, a) == 0 && q.state == QSO_CQ  ||
-                // or for CALL messages where I'm call2 (i.e. I tried to call someone but I got a CQ back)
-                strcmp(qc1, a) == 0 && strcmp(qc2, ui_get_mycall()) == 0 && q.state == QSO_CALLING ) {
-                return &q;
-            }
-        }else if(f.type == MSG_CALL && q.state == QSO_CQ){
-            // for CALLING messages and qso is in state CQ we compare only call1
-            if (strcmp(qc1, a) == 0) {
-                return &q;
-            }
-        }
-       
-        else {
-             // both call1 and call2 should be valid, but in any order (bidirectional match))
-            if ((strcmp(qc1, a) == 0 && strcmp(qc2, b) == 0) ||  // qc2 and b can be empty
-                (strcmp(qc1, b) == 0 && strcmp(qc2, a) == 0)) {
-                return &q;
-            }
-        }
-    }
-    // Serial.printf("No existing QSO found matching call1=%s call2=%s\r\n", f.call1, f.hasCall2 ? f.call2 : "N/A");
-    return nullptr;
-}
-
 // QSO* QSOManager::getQSOByFields(Ft8Fields &f) {
 
 //     if (!f.hasCall1 || !f.call1 || strcmp(f.call1, "") == 0) {
 //         Serial.println("getQSOByFields: call1 is missing or empty, cannot find matching QSO");
 //         return nullptr;
 //     }
+   
 //     const char* a = f.call1;
-//     const char* b = (f.hasCall2 && f.call2) ? f.call2 : "";
+//     const char* b = (f.hasCall2 && f.call2) ? f.call2 : ""; // normalize call2
 
-//     for (auto &q : qso_list) {
+//     for (auto q = qso_list.rbegin(); q != qso_list.rend(); ++q) { // reverse iteration to find the most recent match first
 
-//         if (!q.call1) continue;
-//         const char* qc1 = q.call1;
+//         if (!q->call1) continue; // sanity check, should not happen
+//         const char* qc1 = q->call1;
+//         const char* qc2 = (q->call2 && strlen(q->call2) > 0) ? q->call2 : ""; // normalize call2
 
-//         const char* qc2 = q.call2 ? q.call2 : "";
-
-//         if (strlen(qc2) > 0 && f.hasCall2 && f.call2) {
-//             // complete QSO → bidirectional match
-//             if ((strcmp(qc1, a) == 0 && strcmp(qc2, b) == 0) ||
-//                 (strcmp(qc1, b) == 0 && strcmp(qc2, a) == 0)) {
-//                 return &q;
+//         if(f.type <= MSG_CQ_TEST){
+//              // For CQ messages we want to match on call1 only
+//             if (strcmp(qc1, a) == 0 && q->state == QSO_CQ  ||
+//                 // or for CALL messages where I'm call2 (i.e. I tried to call someone but I got a CQ back)
+//                 strcmp(qc1, a) == 0 && strcmp(qc2, ui_get_mycall()) == 0 && q->state == QSO_CALLING ) {
+//                 return &(*q);
 //             }
-//         } else {
-//             // incomplete QSO → match on call1
-//             if (strcmp(qc1, a) == 0 &&
-//             (strlen(qc2) == 0 || !f.hasCall2 || (f.call2 && strcmp(qc2, b) == 0))) {
-//                 return &q;
+//         }else if(f.type == MSG_CALL && q->state == QSO_CQ){
+//             // for CALLING messages and qso is in state CQ we compare only call1
+//             if (strcmp(qc1, a) == 0) {
+//                 return &(*q);
+//             }
+//         }
+       
+//         else {
+//              // both call1 and call2 should be valid, but in any order (bidirectional match))
+//             if ((strcmp(qc1, a) == 0 && strcmp(qc2, b) == 0) ||  // qc2 and b can be empty
+//                 (strcmp(qc1, b) == 0 && strcmp(qc2, a) == 0)) {
+//                 return &(*q);
 //             }
 //         }
 //     }
-//     Serial.printf("No existing QSO found matching call1=%s call2=%s\r\n", f.call1, f.hasCall2 ? f.call2 : "N/A");
+//     // Serial.printf("No existing QSO found matching call1=%s call2=%s\r\n", f.call1, f.hasCall2 ? f.call2 : "N/A");
 //     return nullptr;
 // }
+
+QSO* QSOManager::getQSOByFields(Ft8Fields &f) {
+    if (!f.hasCall1 || !f.call1 || f.call1[0] == '\0') {
+        Serial.println("getQSOByFields: call1 is missing or empty, cannot find matching QSO");
+        return nullptr;
+    }
+
+    const char* a = f.call1;
+    const char* b = (f.hasCall2 && f.call2 && f.call2[0] != '\0') ? f.call2 : "";
+    const bool spotIsCQ = (f.type <= MSG_CQ_TEST);
+
+    QSO* doneExactPair = nullptr;
+
+    // Newest first
+    for (auto it = qso_list.rbegin(); it != qso_list.rend(); ++it) {
+        QSO& q = *it;
+
+        if (q.call1[0] == '\0') continue;
+
+        const char* qc1 = q.call1;
+        const char* qc2 = (q.call2[0] != '\0') ? q.call2 : "";
+
+        // Option included: unordered pair match (A,B) == (B,A)
+        const bool samePair =
+            (strcmp(qc1, a) == 0 && strcmp(qc2, b) == 0) ||
+            (strcmp(qc1, b) == 0 && strcmp(qc2, a) == 0);
+
+        if (samePair) {
+            if (q.state == QSO_DONE) {
+                // exclude completed QSOs with same pair, but keep track of the most recent one 
+                // to return it if we find nothing better and the incoming message is 
+                // an end-of-QSO type (RR73 or 73)
+                if (!doneExactPair) doneExactPair = &q;
+                continue;
+            }
+            return &q;
+        }
+
+        // CQ fallback: same call1 and open call2
+        if (spotIsCQ &&
+            strcmp(qc1, a) == 0 &&
+            qc2[0] == '\0' &&
+            q.state == QSO_CQ) {
+                // CQ message on a CQ state
+                return &q;
+        }
+    }
+
+    // If only match is DONE and incoming type is before RR73, force new QSO
+    if (doneExactPair) {
+        if (f.type < MSG_RR73) {
+            // the msg is before MSG_RR73 but the only match is QSO DONE 
+            return nullptr;
+        }
+        // the msg is MSG_RR73 or 73 and the only match is QSO DONE, 
+        // we can consider it a match and update the existing QSO 
+        // with the new end-of-QSO message (e.g. we received a RR73 
+        // for a QSO that we had in DONE state because we decoded 
+        // the RR73 before the CALL or CQ)
+        return doneExactPair;
+    }
+
+    return nullptr;
+}
+
 
 QSO* QSOManager::getQsoById(int qso_id) {
 

@@ -574,7 +574,7 @@ void setup() {
   // Configure and initialize the FT8 consumer module
   ft8_consumer_module_config_t consumer_cfg = {
       .sample_rate = 8000,
-      .base_freq_mhz = 14.074f,
+      .base_freq_mhz = 0.0f,
       .sample_queue_depth = 2048, // kSampleQueueDepth,
       .finalize_queue_depth = 4,
       .append_batch_size = 256,
