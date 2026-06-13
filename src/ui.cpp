@@ -248,7 +248,7 @@ bool ui_get_settings(UiSettings* out) {
   out->ft8_offset = ft8_offset;
   out->ft8_offset_enabled = ft8_offset_enabled ? 1 : 0;
   strlcpy(out->ft8_testmsg, ft8_testmsg, sizeof(out->ft8_testmsg));
-  Serial.printf("Getting settings: ft8_mode=%d\n", ft8_mode);
+  // Serial.printf("Getting settings: ft8_mode=%d\n", ft8_mode);
   out->ft8_mode = ft8_mode;
   out->ft8_max_retries = ft8_max_retries;
   out->ft8_send_parity = ft8_send_parity;
@@ -334,7 +334,7 @@ static void saveSettings() {
   s.ft8_offset = ft8_offset;
   s.ft8_offset_enabled = ft8_offset_enabled ? 1 : 0;
   strlcpy(s.ft8_testmsg, ft8_testmsg, sizeof(s.ft8_testmsg));
-  Serial.printf("Saving settings: ft8_mode=%d\n", s.ft8_mode);  
+  // Serial.printf("Saving settings: ft8_mode=%d\n", ft8_mode);  
   s.ft8_mode = ft8_mode;
   s.ft8_max_retries = ft8_max_retries;
   s.ft8_send_parity = ft8_send_parity;
