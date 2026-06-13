@@ -1389,11 +1389,15 @@ document.querySelectorAll('#ft8-qsos th').forEach(th => {
   });
 });
 
-// Poll server for QSOs every 3 seconds
+// Poll server for QSOs with near real-time cadence while avoiding background-tab load.
+let qsosFetchBusy = false;
 async function fetchFt8QSOs(){
   // While audio websocket is active, avoid expensive QSO polling/rendering
   // that can starve streaming on both browser and ESP32.
   //if (ws) return;
+
+    if (qsosFetchBusy) return;
+    qsosFetchBusy = true;
 
     try{
         const resp = await fetch('/api/ft8/qsos');
@@ -1432,8 +1436,10 @@ async function fetchFt8QSOs(){
         }
 
     }catch(e){console.error(e);}
+    finally{qsosFetchBusy = false;}
 }
 setInterval(() => {
+  if (document.hidden) return;
   fetchFt8QSOs();
 }, 3000);
 
