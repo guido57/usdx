@@ -25,6 +25,7 @@
 #include "adif.h"
 // #include "ft8_decoder.h"
 #include "ft8_consumer_module.h"
+#include "ws_audiostream.h"
   
 static SI5351 si5351;
 FT8_TX ft8tx(si5351);
@@ -35,6 +36,7 @@ Adif adif;
 PCM1808 * pcm1808;
 AntennaFilters *antFilters;
 PowerSWRMeter *pwrswrmeter;
+extern WSAudioStream wsAudioStream;
 static bool setup_done = false;
 static bool synthInitialized = false;
 static Si5351RxSynthState lastSynth = { 0, 0, SI5351_RX_MODE_LSB, 0, false, 700 };
@@ -198,7 +200,7 @@ static void processAudioPCM1808() {
       int16_t webAbs = abs(webAudio) > 32767 ? 32767 : abs(webAudio);
       if (webAbs > peakWebAudio) peakWebAudio = webAbs;
 
-      wifi_config_audio_push(lastSynth.vfoHz, webAudio);
+      wsAudioStream.pushSample(lastSynth.vfoHz, webAudio);
 
       // Never block the audio loop; drop FT8 sample if decoder queue is full.
       (void)ft8_consumer_module_enqueue_i16(&audioSample, 1, 0);
@@ -542,7 +544,6 @@ void setup() {
   // } else {
   //   Serial.printf("Failed to initialize I2S audio!\r\n");
   // }
-  
   Serial.printf("Initialize antenna filters control (MCP23017).\r\n");
   antFilters = new AntennaFilters( ANT_FILTERS_ADDR); // the actual I2C address of your MCP23017
   antFilters->begin();

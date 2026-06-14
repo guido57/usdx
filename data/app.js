@@ -690,7 +690,7 @@ function startAudio(){
     if(!(evt.data instanceof ArrayBuffer)) return;
     const dv = new DataView(evt.data);
     if(dv.byteLength < 16) return;
-
+    // console.log("ts=", (dv.getBigUint64(0, false) - BigInt(Date.now())).toString());
     const announcedSamples = dv.getUint32(8, false); // big-endian header field
     const maxSamples = Math.floor((dv.byteLength - 16) / 2);
     const samples = Math.min(announcedSamples, maxSamples);

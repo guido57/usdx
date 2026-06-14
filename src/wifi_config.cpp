@@ -23,6 +23,7 @@
 #include "qsostats.h"
 #include "adif.h"
 #include "task_profilers.h"
+#include "ws_audiostream.h"
 
 extern FT8_TX ft8tx; // declared in main.cpp
 extern FT8FreqOptimizer ft8FreqOptimizer; // declared in main.cpp
@@ -32,25 +33,26 @@ extern QueueHandle_t profilerMutex;
 
 static WebServer server(80);
 static WebSocketsServer wsServer(8765);  // Default port; will be updated from UI settings
+WSAudioStream wsAudioStream(wsServer); 
 
 fs::LittleFSFS LogsFS; // Separate LittleFS instance for logs to avoid wear on the main filesystem
 
 #define CHUNK_SAMPLES 160
 #define FRAME_SIZE (16 + CHUNK_SAMPLES*2) // header 16B + audio
 
-#define WS_AUDIO_BUF_SAMPLES 512   // larger frame buffer for smoother websocket streaming
+// #define WS_AUDIO_BUF_SAMPLES 512   // larger frame buffer for smoother websocket streaming
 
-typedef struct {
-    uint64_t ts_ms;
-    int32_t  freq_hz;
-    uint16_t n_samples;
-    int16_t  samples[WS_AUDIO_BUF_SAMPLES];
-} AudioFrame;
+// typedef struct {
+//     uint64_t ts_ms;
+//     int32_t  freq_hz;
+//     uint16_t n_samples;
+//     int16_t  samples[WS_AUDIO_BUF_SAMPLES];
+// } AudioFrame;
 
-#define AUDIO_FRAME_POOL 8
-static AudioFrame audioPool[AUDIO_FRAME_POOL];
+// #define AUDIO_FRAME_POOL 8
+// static AudioFrame audioPool[AUDIO_FRAME_POOL];
 
-volatile uint8_t audioPoolHead = 0;
+// volatile uint8_t audioPoolHead = 0;
 
 // ---- Queue ----
 QueueHandle_t audioQueue;      // filled audio frames
@@ -96,7 +98,7 @@ uint32_t g_ft8LastRxMs        = 0;
 
 static const uint8_t  FT8_MSGS_PER_LOOP_MAX = 6;
 static const uint8_t  FT8_MSGS_WHEN_AUDIO_PENDING = 1;
-static const uint8_t  AUDIO_FRAMES_PER_LOOP_MAX = 3;
+static const uint8_t  AUDIO_FRAMES_PER_LOOP_MAX = 30;
 
 QSOManager qsoManager;
 
@@ -104,7 +106,6 @@ enum NetSectionIdx : uint8_t {
     NS_HTTP = 0,
     NS_WS_LOOP,
     NS_ETH_HEALTH,
-    NS_AUDIO_TX,
     NS_ADIF_TX,
     NS_FT8_RX,
     NS_STATUS,
@@ -116,7 +117,6 @@ static const char* kNetSectionNames[NS_COUNT] = {
     "http",
     "ws_loop",
     "eth_health",
-    "audio_tx",
     "adif_tx",
     "ft8_rx",
     "status",
@@ -150,7 +150,7 @@ static void saveCredentials(const String& ssid, const String& pass) {
     prefs.end();
 }
 
-static uint64_t utc_ms() {
+uint64_t utc_ms() {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (uint64_t)tv.tv_sec * 1000ULL + tv.tv_usec / 1000;
@@ -696,6 +696,7 @@ static void handleMemoryStats() {
         g_netSectionHits[i] = 0;
     }
 
+    static uint64_t lastNetStatsTime = 0;
     for (uint8_t i = 0; i < NS_COUNT; i++) {
         JsonObject obj = netArr.add<JsonObject>();
         obj["name"] = kNetSectionNames[i];
@@ -703,6 +704,7 @@ static void handleMemoryStats() {
         obj["hits"] = secHits[i];
         obj["busy_us"] = secBusy[i];
         obj["busy_avg_us"] = secHits[i] ? (secBusy[i] / secHits[i]) : 0;
+    
     }
     
     String out;
@@ -1123,6 +1125,7 @@ void NetworkTask(void* pvParameters) {
         Serial.printf("mDNS started: %s.local\n", ui_get_ws_server_host());
     }
     startWebSocketServer();
+    wsAudioStream.begin();
 
     for (;;) {
         uint64_t t0 = esp_timer_get_time();
@@ -1177,51 +1180,6 @@ void NetworkTask(void* pvParameters) {
             }
         }
         netSectionAdd(NS_ETH_HEALTH, esp_timer_get_time() - ts);
-
-        // ---- Send audio to websocket ----
-        ts = esp_timer_get_time();
-        AudioFrame* framePtr;
-        uint8_t sentAudioFrames = 0;
-        static constexpr uint64_t AUDIO_BROADCAST_TIMEOUT_US = 500000ULL; // 500 ms
-        bool audioStalled = false;
-        while (!audioStalled &&
-               sentAudioFrames < AUDIO_FRAMES_PER_LOOP_MAX &&
-               xQueueReceive(audioQueue, &framePtr, 0) == pdTRUE) {
-
-            if (wsServer.connectedClients() > 0) {
-                uint8_t packet[16 + WS_AUDIO_BUF_SAMPLES * 2];
-
-                for (int i = 0; i < 8; i++) packet[7 - i] = (framePtr->ts_ms >> (8 * i)) & 0xFF;
-                for (int i = 0; i < 4; i++) packet[8 + 3 - i] = (framePtr->n_samples >> (8 * i)) & 0xFF;
-                for (int i = 0; i < 4; i++) packet[12 + 3 - i] = (framePtr->freq_hz >> (8 * i)) & 0xFF;
-
-                size_t samplesToCopy = min((uint16_t)framePtr->n_samples, (uint16_t)WS_AUDIO_BUF_SAMPLES);
-                memcpy(packet + 16, framePtr->samples, samplesToCopy * 2);
-
-                uint64_t sendStart = esp_timer_get_time();
-                wsServer.broadcastBIN(packet, 16 + samplesToCopy * 2);
-                uint64_t sendUs = esp_timer_get_time() - sendStart;
-
-                if (sendUs > AUDIO_BROADCAST_TIMEOUT_US) {
-                    Serial.printf("[Audio] broadcastBIN stalled %llu us — disconnecting all WS clients\n", sendUs);
-                    // Forcibly kill all stalled WS clients
-                    for (uint8_t ci = 0; ci < WEBSOCKETS_SERVER_CLIENT_MAX; ci++) {
-                        wsServer.disconnect(ci);
-                    }
-                    // Drain remaining audio frames so queue doesn't pile up
-                    xQueueSend(freeFrameQueue, &framePtr, 0);
-                    while (xQueueReceive(audioQueue, &framePtr, 0) == pdTRUE) {
-                        xQueueSend(freeFrameQueue, &framePtr, 0);
-                    }
-                    audioStalled = true;
-                    continue; // skip the free below, already returned
-                }
-            }
-
-            xQueueSend(freeFrameQueue, &framePtr, 0);
-            sentAudioFrames++;
-        }
-        netSectionAdd(NS_AUDIO_TX, esp_timer_get_time() - ts);
 
         // ---- Send ADIF to WebSocket clients ----
         ts = esp_timer_get_time();
@@ -1359,7 +1317,7 @@ void WiFiNetworkTask(void* pvParameters) {
         // ---- Send audio to websocket if available ----
         AudioFrame* framePtr;
         uint8_t sentAudioFrames = 0;
-        while (sentAudioFrames < AUDIO_FRAMES_PER_LOOP_MAX &&
+        while ( /* sentAudioFrames < AUDIO_FRAMES_PER_LOOP_MAX && */
                xQueueReceive(audioQueue, &framePtr, 0) == pdTRUE) {
 
           if (wsServer.connectedClients() > 0) {
@@ -1508,63 +1466,24 @@ void wifi_config_setup() {
     
     loadCredentials();
 
-    if(audioQueue == NULL)  audioQueue = xQueueCreate(6, sizeof(AudioFrame*));
-    if(freeFrameQueue == NULL) freeFrameQueue = xQueueCreate(AUDIO_FRAME_POOL, sizeof(AudioFrame*));
+    // if(audioQueue == NULL)  audioQueue = xQueueCreate(6, sizeof(AudioFrame*));
+    // if(freeFrameQueue == NULL) freeFrameQueue = xQueueCreate(AUDIO_FRAME_POOL, sizeof(AudioFrame*));
     
     if(adifQueue == NULL) adifQueue = xQueueCreate(1, sizeof(AdifUploadItem)); 
 
     // 3. Popolate the queue (be sure audioPool is GLOBAL or STATIC)
-    if (uxQueueMessagesWaiting(freeFrameQueue) == 0) {
-        for (int i=0; i < AUDIO_FRAME_POOL; i++) {
-            AudioFrame* f = &audioPool[i];
-            if (xQueueSend(freeFrameQueue, &f, 0) != pdTRUE) break;
-        }
-    }
+    // if (uxQueueMessagesWaiting(freeFrameQueue) == 0) {
+    //     for (int i=0; i < AUDIO_FRAME_POOL; i++) {
+    //         AudioFrame* f = &audioPool[i];
+    //         if (xQueueSend(freeFrameQueue, &f, 0) != pdTRUE) break;
+    //     }
+    // }
 
     if(ft8Queue == NULL) ft8Queue = xQueueCreate(8,  MAX_FT8_MSG);
 
     Serial.printf("Start network task on Core 0\n");
     xTaskCreatePinnedToCore(NetworkTask, "NET", 36000, &profilers[0], 1, NULL, 0); 
 }
-
-// ===== Audio Push =====
-// It is called from the audio processing task to stream audio samples to WebSocket clients.
-void wifi_config_audio_push(int32_t freq_hz, int16_t sample)
-{
-    static AudioFrame* frame = NULL;
-    static uint16_t idx = 0;
-
-    if (frame == NULL) {
-      // get a free frame from the pool
-      if (xQueueReceive(freeFrameQueue, &frame, 0) != pdTRUE){
-        //idx = 0; // no free frame available, drop the sample
-        return; // there's no free frame in the pool of free frames → drop
-      }
-      //idx = 0; // reset index for new frame 
-    }
-    // put the sample in the frame
-    if (idx < WS_AUDIO_BUF_SAMPLES) {
-        frame->samples[idx++] = sample;
-    }
-    
-    if (idx >= WS_AUDIO_BUF_SAMPLES) {
-        // frame is full, add header info
-        //ets_printf("[Audio] Frame ready with %d samples at %d Hz\n", frame->n_samples, frame->freq_hz); 
-        frame->ts_ms     = utc_ms();
-        frame->freq_hz   = freq_hz;
-        frame->n_samples = WS_AUDIO_BUF_SAMPLES;
-        // send the ready frame to the websocket audio queue
-        if (xQueueSend(audioQueue, &frame, 0) != pdTRUE) {
-          // audio queue full, drop the frame and return it to free pool
-          xQueueSend(freeFrameQueue, &frame, 0); 
-        }
-
-        frame = NULL;
-        idx = 0;
-  
-    }
-}
-
 
 // ===== ADIF Text Push =====
 // It is called from QSO Manager to stream ADIF text to WebSocket server
