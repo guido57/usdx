@@ -253,6 +253,7 @@ static void handleApiUi() {
     doc["smode"] = s.smode;
     doc["backlight"] = s.backlight;
     doc["sifxtal"] = s.sifxtal; doc["iq_phase"] = s.iq_phase;
+    doc["sidrive"] = s.sidrive;
     doc["iq_balance"] = s.iq_balance; doc["iq_delay"] = s.iq_delay; doc["wf_thresh"] = s.wf_thresh;
     String out;
     serializeJson(doc, out);
@@ -295,7 +296,7 @@ static void handleApiUiSave() {
     JSET(filt); JSET(agc); JSET(nr); JSET(att); JSET(smode);
     JSET(backlight);
     JSET(sifxtal); JSET(iq_phase); JSET(iq_balance); JSET(iq_delay);
-    JSET(wf_thresh);
+    JSET(wf_thresh); JSET(sidrive);
 
     #undef JSET
 
@@ -732,6 +733,7 @@ static void startWebServer() {
     server.serveStatic("/app.js", LittleFS, "/app.js");
     server.serveStatic("/style.css", LittleFS, "/style.css");
     server.serveStatic("/cty_extended.dat", LittleFS, "/cty_extended.dat");
+    server.serveStatic("/favicon.ico", LittleFS, "/favicon.png");
 
     server.on("/api/status", HTTP_GET, handleApiStatus);
     server.on("/api/ui", HTTP_GET, handleApiUi);
@@ -1182,25 +1184,27 @@ void NetworkTask(void* pvParameters) {
         netSectionAdd(NS_ETH_HEALTH, esp_timer_get_time() - ts);
 
         // ---- Send ADIF to WebSocket clients ----
-        ts = esp_timer_get_time();
-        if (wsServer.connectedClients() > 0) {
-            AdifUploadItem adifItem;
-            if (xQueueReceive(adifQueue, &adifItem, 0) == pdTRUE) {
-                size_t len = strnlen(adifItem.adif, sizeof(adifItem.adif));
-                wsServer.broadcastTXT(adifItem.adif, len);
-            }
-        }
+        // ts = esp_timer_get_time();
+        // if (wsServer.connectedClients() > 0) {
+        //     AdifUploadItem adifItem;
+        //     if (xQueueReceive(adifQueue, &adifItem, 0) == pdTRUE) {
+        //         size_t len = strnlen(adifItem.adif, sizeof(adifItem.adif));
+        //         wsServer.broadcastTXT(adifItem.adif, len);
+
+        //     }
+        // }
         netSectionAdd(NS_ADIF_TX, esp_timer_get_time() - ts);
 
         // ---- FT8 messages from decoder websocket ----
         ts = esp_timer_get_time();
         char ft8Msg[MAX_FT8_MSG];
-        const uint8_t ft8Budget = (uxQueueMessagesWaiting(audioQueue) > 0)
-                                    ? FT8_MSGS_WHEN_AUDIO_PENDING
-                                    : FT8_MSGS_PER_LOOP_MAX;
+        // const uint8_t ft8Budget = (uxQueueMessagesWaiting(audioQueue) > 0)
+        //                             ? FT8_MSGS_WHEN_AUDIO_PENDING
+        //                             : FT8_MSGS_PER_LOOP_MAX;
         uint8_t processedFt8Msgs = 0;
-        while (processedFt8Msgs < ft8Budget &&
+        while ( /* processedFt8Msgs < ft8Budget && */
                xQueueReceive(ft8Queue, ft8Msg, 0) == pdTRUE) {
+            //  Serial.printf("[FT8] Received FT8 message: %s\n", ft8Msg);    
             if (ui_get_ws_server_enabled()) {
                 addFt8SpotFromJson(ft8Msg);
             }
@@ -1490,6 +1494,7 @@ void wifi_config_setup() {
 void wifi_config_adif_push(AdifUploadItem adif)
 {
     // send the ADIF text to the websocket queue
-    xQueueSend(adifQueue, &adif, 0); 
+    // xQueueSend(adifQueue, &adif, 0); 
+    wsAudioStream.sendText(adif.adif, strlen(adif.adif));
 }
 

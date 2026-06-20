@@ -89,7 +89,7 @@ int16_t qh = (int16_t)qh_f;
     case DEMOD_USB:
       // LSB/USB is the sum of delayed I and Hilbert Q
       // the switch between LSB/USB is done in the SI5351 
-      ac = i_delayed + qh; 
+      ac = i_delayed - qh; 
       break;
       
     case DEMOD_AM:

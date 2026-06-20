@@ -46,6 +46,7 @@ struct UiSettings {
 	int8_t smode;
 	int8_t backlight;
 	int32_t sifxtal;
+	uint8_t sidrive;
 	int16_t iq_phase;
 	int16_t iq_balance;
 	int16_t iq_delay;
@@ -83,6 +84,8 @@ int8_t ui_get_agc();
 int8_t ui_get_wf_thresh();
 
 int32_t ui_get_sifxtal();
+uint8_t ui_get_sidrive();
+
 
 int8_t ui_get_att();
 int8_t ui_get_att_rf();

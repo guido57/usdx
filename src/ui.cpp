@@ -66,6 +66,7 @@ static int16_t txdelay = 0;
 static int8_t mox = 0;
 static int8_t backlight = 1;
 static int32_t sifxtal = (int32_t)F_XTAL;
+static int8_t sidrive = 3;  // SI5351 drive strength (0=2mA, 1=4mA, 2=6mA, 3=8mA)
 static int16_t iq_phase = 90;  // IQ phase adjustment for sideband rejection
 static int16_t iq_balance = 100;  // IQ amplitude balance (100 = 1.00x, range 80-120 = 0.80x-1.20x)
 static int16_t iq_delay = 0;  // IQ fractional delay in 0.01 samples (-50..50 => -0.50..+0.50)
@@ -106,6 +107,7 @@ int16_t ui_get_iq_phase() { return iq_phase; }
 float ui_get_iq_balance() { return iq_balance / 100.0f; }
 float ui_get_iq_delay() { return iq_delay / 100.0f; }
 int32_t ui_get_sifxtal() { return sifxtal; }
+uint8_t ui_get_sidrive() { return sidrive; }
 int8_t ui_get_att() { return att; }
 int8_t ui_get_att_rf() { return att_rf; }
 int8_t ui_get_tx_bias() { return tx_bias; }
@@ -223,6 +225,7 @@ static void loadSettings() {
   smode = constrain(s.smode, (int8_t)0, (int8_t)6);
   backlight = constrain(s.backlight, (int8_t)0, (int8_t)1);
   sifxtal = constrain(s.sifxtal, 10000000, 40000000);
+  sidrive = constrain(s.sidrive, (int8_t)0, (int8_t)3);
   iq_phase = constrain(s.iq_phase, (int16_t)30, (int16_t)150);
   iq_balance = constrain(s.iq_balance, (int16_t)50, (int16_t)150);
   iq_delay = constrain(s.iq_delay, (int16_t)-50, (int16_t)50);
@@ -270,6 +273,7 @@ bool ui_get_settings(UiSettings* out) {
   out->smode = smode;
   out->backlight = backlight;
   out->sifxtal = sifxtal;
+  out->sidrive = sidrive;
   out->iq_phase = iq_phase;
   out->iq_balance = iq_balance;
   out->iq_delay = iq_delay;
@@ -307,6 +311,7 @@ void ui_apply_settings(const UiSettings& s) {
   smode = constrain(s.smode, (int8_t)0, (int8_t)6);
   backlight = constrain(s.backlight, (int8_t)0, (int8_t)1);
   sifxtal = constrain(s.sifxtal, 10000000, 40000000);
+  sidrive = constrain(s.sidrive, (int8_t)0, (int8_t)3);
   iq_phase = constrain(s.iq_phase, (int16_t)30, (int16_t)150);
   iq_balance = constrain(s.iq_balance, (int16_t)50, (int16_t)150);
   iq_delay = constrain(s.iq_delay, (int16_t)-50, (int16_t)50);
@@ -358,6 +363,7 @@ static void saveSettings() {
   s.smode = smode;
   s.backlight = backlight;
   s.sifxtal = sifxtal;
+  s.sidrive = sidrive;
   s.iq_phase = iq_phase;
   s.iq_balance = iq_balance;
   s.iq_delay = iq_delay;
@@ -444,6 +450,7 @@ static int32_t param_txdelay = txdelay;
 static int32_t param_mox = mox;
 static int32_t param_backlight = backlight;
 static int32_t param_sifxtal = sifxtal;
+static int32_t param_sidrive = sidrive;
 static int32_t param_iq_phase = iq_phase;
 static int32_t param_iq_balance = iq_balance;
 static int32_t param_iq_delay = iq_delay;
@@ -575,6 +582,7 @@ static void applyParamToState() {
   mox = static_cast<int8_t>(constrain(param_mox, 0, 1));
   backlight = static_cast<int8_t>(constrain(param_backlight, 0, 1));
   sifxtal = constrain(param_sifxtal, 10000000, 40000000);
+  sidrive = static_cast<int8_t>(constrain(param_sidrive, 0, 3));
   iq_phase = static_cast<int16_t>(constrain(param_iq_phase, 30, 150));
   iq_balance = static_cast<int16_t>(constrain(param_iq_balance, 50, 150));
   iq_delay = static_cast<int16_t>(constrain(param_iq_delay, -50, 50));

@@ -26,6 +26,7 @@ struct Si5351RxSynthState {
   bool ritActive;
   int16_t cwOffset;
   int16_t iqPhase;
+  uint8_t driveStrength;
 };
 
 static inline bool synthStateChanged(const Si5351RxSynthState& a, const Si5351RxSynthState& b) {
@@ -36,6 +37,7 @@ static inline bool synthStateChanged(const Si5351RxSynthState& a, const Si5351Rx
   if (a.rit != b.rit) return true;
   if (a.cwOffset != b.cwOffset) return true;
   if (a.iqPhase != b.iqPhase) return true;
+  if (a.driveStrength != b.driveStrength) return true;
   return false;
 }
 
@@ -62,6 +64,29 @@ public:
   #define FAST __attribute__((optimize("Ofast")))
 
   volatile uint32_t fxtal = F_XTAL;
+
+  void setDriveStrength(uint8_t strength)
+  {
+      // if (clk > 2){
+      //   Serial.printf("Invalid CLK%d for drive strength setting. CLK0..CLK2 only\n", clk);
+      //   return;           // CLK0..CLK2 only
+      // } 
+      if (strength > 3){
+        Serial.printf("Invalid drive strength %u. Must be 0=2mA, 1=4mA, 2=6mA, or 3=8mA\n", strength); 
+        return;      // 0=2mA, 1=4mA, 2=6mA, 3=8mA
+      }  
+
+      for(uint8_t clk=0; clk<0; clk++) {  // set drive strength for all CLK outputs
+        uint8_t reg = RecvRegister(16 + clk);
+
+        // Clear bits 1:0 and insert new drive strength
+        reg = (reg & 0xFC) | (strength & 0x03);
+
+        SendRegister(16 + clk, reg);
+      
+      }
+      drive_strength = strength; // it is used in ms() lso, so we keep track of it here
+  }
 
   inline void FAST freq_calc_fast(int16_t df)  // note: relies on cached variables: _msb128, _msa128min512, _div, _fout, fxtal
   {
@@ -336,6 +361,8 @@ static inline int32_t programSi5351Rx(SI5351& si5351, const Si5351RxSynthState& 
   } else {
     si5351.freq(freq, 0, rx_ph_q);
   }
+
+  si5351.setDriveStrength(s.driveStrength);
 
   const int16_t rit = s.ritActive ? s.rit : 0;
   if (rit != 0) {

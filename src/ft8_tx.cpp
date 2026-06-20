@@ -101,6 +101,7 @@ bool FT8_TX::startContinuousTransmission(uint32_t baseFreqHz, const char *msg) {
     Serial.printf("Started continuous transmission at %u Hz\r\n", baseFreqHz);
 
     si5351.setupPllForTx(baseFreqHz); // Pre-configure PLL for the base frequency to speed up the first tone generation
+    si5351.setDriveStrength(ui_get_sidrive()); // Set drive strength from UI setting
     //setRxAttFromUi(0);  // Set RX attenuation to maximum (0V to the Mosfet Gate)
     //setTxBiasFromUi(ui_get_tx_bias());  // Set TX bias at 1V to the Mosfet Gate) during tuning and RX to protect the PA   
     audioVolume = 0; // Mute audio during TX    
