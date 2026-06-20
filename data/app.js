@@ -10,6 +10,9 @@ const MY_LOCATOR = "JN53qh"; // <-- change to yours
 let ctyData = [];
 let prefixMap = [];
 
+let ws_server_name = "";
+let ws_server_port = "";
+
 async function loadCtyDat() {
   const resp = await fetch('/cty_extended.dat');
   const text = await resp.text();
@@ -681,7 +684,7 @@ function startAudio(){
   node=audioCtx.createScriptProcessor(512,0,1);
   node.onaudioprocess=onAudio;
   node.connect(audioCtx.destination);
-  ws=new WebSocket('ws://ft8-esp32.local:8765');
+  ws=new WebSocket(`ws://${ws_server_name}:${ws_server_port}`);
   ws.binaryType='arraybuffer';
   ws.onopen=()=>setStatus('Streaming (buffering)');
   ws.onclose=()=>{setStatus('Stopped'); ws=null;};
@@ -807,6 +810,14 @@ async function fetchUi(){
       div.appendChild(label);
       div.appendChild(ctrl);
       container.appendChild(div);
+
+      // relaod global ws server name and port if they are changed in the UI
+      if(input.name === 'ws_server_host') {
+        ws_server_name = input.value + ".local";  
+      }else if(input.name === 'ws_server_port') {
+        ws_server_port = input.value;
+      }
+
     }
   }catch(e){console.error(e);}
 }
