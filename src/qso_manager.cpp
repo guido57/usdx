@@ -974,7 +974,7 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
         long ageSec = (timestamp - it->firstSeen);
         // Serial.printf("Checking if I can remove QSO %d with age %lu seconds, state %d, pending job: %s\r\n", it->qso_id, ageSec, it->state, pending_jobs ? "YES" : "NO");   
         if (it->state < QSO_DONE && pending_jobs == nullptr && ageSec > 300) {
-            Serial.printf("Removing oldest (%lu secs) QSO %d with no pending job\n", ageSec, it->qso_id);
+            // Serial.printf("Removing oldest (%lu secs) QSO %d with no pending job\n", ageSec, it->qso_id);
             it = qso_list.erase(it);
         } else {
             ++it;

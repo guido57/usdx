@@ -165,6 +165,11 @@ static void processAudioPCM1808() {
     sample32.I >>= 6;
     sample32.Q >>= 6;
 
+    // Apply I Q balance from UI
+    float iqb = ui_get_iq_balance(); // read IQ balance from UI (currently not applied in processing, just read here to ensure we have the latest value for display in the UI)
+    sample32.I = (int32_t)(sample32.I * iqb);
+    sample32.Q = (int32_t)(sample32.Q * (2.0f -iqb)); // apply inverse of balance to Q to keep overall gain constant
+
     rawSampleCount++;
 
     // Feed CIC
@@ -259,7 +264,7 @@ static void processAudioPCM1808() {
           peakWarn(peakWebAudio) ||
           peakWarn(peakAudioOut);
 
-        if ( (alert || warn) && !transmitting) {
+        //if ( (alert || warn) && !transmitting) {
 
 
           Serial.printf(
@@ -271,15 +276,13 @@ static void processAudioPCM1808() {
             peakWebAudio,
             peakAudioOut
           );
-        }
+        //}
 
       peakIDec = peakQDec = peakAudio = peakWebAudio = peakAudioOut = 0;
       peakLastMs = si5351_now;
     }
   }
 }
-
-#include <math.h> // for sinf, cosf
 
 
 #define AUDIO_BUFFER_SIZE 2048
@@ -481,6 +484,7 @@ void setup() {
     ui_get_rit_active(),
     ui_get_cw_offset(),
     ui_get_iq_phase(),
+    ui_get_sidrive()
   };
   
   if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare UI !!!\n");
@@ -547,7 +551,7 @@ void setup() {
   Serial.printf("Initialize antenna filters control (MCP23017).\r\n");
   antFilters = new AntennaFilters( ANT_FILTERS_ADDR); // the actual I2C address of your MCP23017
   antFilters->begin();
-  antFilters->bypassAll(); // Start with all filters bypassed
+  antFilters->setFilter(lastSynth.vfoHz); // Set the filter based on the initial VFO frequency and mode
   antFilters->setRx();
 
   // Initialize RX attenuation PWM control
@@ -668,17 +672,13 @@ void loop() {
   // ---------------- UI ----------------
   start = esp_timer_get_time();
   ui_loop();
-  // xSemaphoreTake(profilerMutex, portMAX_DELAY);
   p_ui->busy_us += esp_timer_get_time() - start; // update profiler busy time
   p_ui->loops++;
-  // xSemaphoreGive(profilerMutex);
   // ------------- Audio ---------------
   start = esp_timer_get_time();
   processAudioPCM1808();
-  // xSemaphoreTake(profilerMutex, portMAX_DELAY);
   p_dsp->busy_us += esp_timer_get_time() - start; // update profiler busy time
   p_dsp->loops++;
-  // xSemaphoreGive(profilerMutex);
   cycles++;
 
   // ----------- Synth control ----------
@@ -691,6 +691,7 @@ void loop() {
     ui_get_rit_active(),
     ui_get_cw_offset(),
     ui_get_iq_phase(),
+    ui_get_sidrive()
   };
 
   if (synthStateChanged(si5351_now, lastSynth)) {
@@ -721,9 +722,16 @@ void loop() {
     if(transmitting) {
       Serial.printf("pwr=%.2f SWR=%.2f\n", pwrswrmeter->readPower(), pwrswrmeter->readSWR());
     }else{
-      antFilters->setRx(); // just to be sure we are in RX mode and not accidentally left in TX mode with filters set for TX 
+      
     }
     lastPwrswrReport = millis();
+  }
+
+  // Every 60 seconds, re-apply the antenna filter for the current VFO frequency to ensure we are not accidentally left in a state with wrong filters (for example if there was a glitch during programming when changing mode/frequency in the UI that caused the filter update to be skipped, or if we are in a mode that doesn't automatically update filters on every loop like CW where filters are only updated when CW offset changes)
+  static unsigned long lastSetAntFilters = 0;
+  if(millis() - lastSetAntFilters > 60000 && !transmitting) { // every 60 seconds just to be sure we are in RX mode and not accidentally left in TX mode with filters set for TX
+    antFilters->setFilter(si5351_now.vfoHz); // just to be sure we are in RX mode and not accidentally left in TX mode with filters set for TX 
+    lastSetAntFilters = millis();
   }
 
   if(!transmitting) {
@@ -741,10 +749,8 @@ void loop() {
   }
   qsoStats.periodicSave(millis());
 
-  // xSemaphoreTake(profilerMutex, portMAX_DELAY);
   p_loop->busy_us += esp_timer_get_time() - t0; // update loop profiler busy time 
   p_loop->loops++;
-  // xSemaphoreGive(profilerMutex);
 
 
   static unsigned long lastStatPrint = 0;
