@@ -467,7 +467,7 @@ void setup() {
   if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare Wire !!!\n");
   
   Serial.printf("Initialize shared I2C bus once (OLED + SI5351 + MCP23017 use the same Wire instance).\r\n");
-  Wire.begin(I2C_SDA, I2C_SCL,1000000U);
+  Wire.begin(I2C_SDA, I2C_SCL,100000U);
   Wire.setTimeOut(20);
   delay(10);
     
