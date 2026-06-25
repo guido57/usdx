@@ -5,13 +5,13 @@
       "Application": "Pcbnew",
       "Version": "10.0.3"
     },
-    "CreationDate": "2026-05-25T11:32:20+02:00"
+    "CreationDate": "2026-06-25T17:19:55+02:00"
   },
   "GeneralSpecs": {
     "ProjectId": {
       "Name": "usdx_kicad",
       "GUID": "75736478-5f6b-4696-9361-642e6b696361",
-      "Revision": "rev?"
+      "Revision": "1.1"
     },
     "Size": {
       "X": 153.05,

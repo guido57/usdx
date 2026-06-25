@@ -5,8 +5,9 @@
 	(uuid "e65cc3c5-b1c3-4008-a533-1c3510284050")
 	(paper "A4")
 	(title_block
-		(date "2026-05-23")
-		(rev "0.1")
+		(title "FT8 ESP32")
+		(date "21/06/2026")
+		(rev "1.1")
 		(company "Guido Giorgetti - IW5ALZ")
 	)
 	(lib_symbols
@@ -1669,192 +1670,6 @@
 						)
 					)
 					(number "8"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-			)
-			(embedded_fonts no)
-		)
-		(symbol "Connector:Conn_Coaxial"
-			(pin_names
-				(offset 1.016)
-				(hide yes)
-			)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(in_pos_files yes)
-			(duplicate_pin_numbers_are_jumpers no)
-			(property "Reference" "J"
-				(at 0.254 3.048 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Value" "Conn_Coaxial"
-				(at 2.921 0 90)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Footprint" ""
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Datasheet" ""
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Description" "coaxial connector (BNC, SMA, SMB, SMC, Cinch/RCA, LEMO, ...)"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "ki_keywords" "BNC SMA SMB SMC LEMO coaxial connector CINCH RCA MCX MMCX U.FL UMRF"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "ki_fp_filters" "*BNC* *SMA* *SMB* *SMC* *Cinch* *LEMO* *UMRF* *MCX* *U.FL*"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(symbol "Conn_Coaxial_0_1"
-				(polyline
-					(pts
-						(xy -2.54 0) (xy -0.508 0)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(arc
-					(start 1.778 0)
-					(mid 0.222 -1.8079)
-					(end -1.778 -0.508)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(arc
-					(start -1.778 0.508)
-					(mid 0.2221 1.8084)
-					(end 1.778 0)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(circle
-					(center 0 0)
-					(radius 0.508)
-					(stroke
-						(width 0.2032)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 0 -2.54) (xy 0 -1.778)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-			)
-			(symbol "Conn_Coaxial_1_1"
-				(pin passive line
-					(at -5.08 0 0)
-					(length 2.54)
-					(name "In"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin passive line
-					(at 0 -5.08 90)
-					(length 2.54)
-					(name "Ext"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "2"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -5317,6 +5132,119 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "mySymbolLibrary:SMA_Connector"
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "U"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" "myFootprintLibrary:SMA connector"
+				(at -0.508 8.382 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "SMA_Connector_0_1"
+				(circle
+					(center 0 0)
+					(radius 2.032)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "SMA_Connector_1_1"
+				(pin input line
+					(at 2.54 -2.54 180)
+					(length 2.54)
+					(name "GND"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at 3.81 0 180)
+					(length 2.54)
+					(name "RF"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "power:+3.3V"
 			(power global)
 			(pin_numbers
@@ -6201,16 +6129,6 @@
 	)
 	(wire
 		(pts
-			(xy 27.94 165.1) (xy 27.94 166.37)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "1042e041-6135-47db-b0ee-6618d304ec30")
-	)
-	(wire
-		(pts
 			(xy 156.21 101.6) (xy 156.21 97.79)
 		)
 		(stroke
@@ -6931,6 +6849,16 @@
 	)
 	(wire
 		(pts
+			(xy 31.75 160.02) (xy 33.02 160.02)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "5d88060d-b846-4ad6-be27-103a1a81b0e5")
+	)
+	(wire
+		(pts
 			(xy 245.11 77.47) (xy 254 77.47)
 		)
 		(stroke
@@ -7261,16 +7189,6 @@
 	)
 	(wire
 		(pts
-			(xy 33.02 139.7) (xy 33.02 160.02)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "83690f13-5d0f-4a2c-96a3-44bf4c810129")
-	)
-	(wire
-		(pts
 			(xy 52.07 133.35) (xy 59.69 133.35)
 		)
 		(stroke
@@ -7491,16 +7409,6 @@
 	)
 	(wire
 		(pts
-			(xy 38.1 170.18) (xy 43.18 170.18)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "a3fb3504-2c0a-407d-a6b2-64fa79fe9dc5")
-	)
-	(wire
-		(pts
 			(xy 99.06 17.78) (xy 109.22 17.78)
 		)
 		(stroke
@@ -7661,6 +7569,16 @@
 	)
 	(wire
 		(pts
+			(xy 43.18 170.18) (xy 43.18 162.56)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b9792aa2-c67c-4767-99f1-38c191d74b07")
+	)
+	(wire
+		(pts
 			(xy 121.92 154.94) (xy 129.54 154.94)
 		)
 		(stroke
@@ -7718,6 +7636,16 @@
 			(type default)
 		)
 		(uuid "c0900805-0b3e-4f9e-a3f6-af3c3418822e")
+	)
+	(wire
+		(pts
+			(xy 41.91 160.02) (xy 43.18 160.02)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c090ba11-9b30-497f-a837-bb82cff55958")
 	)
 	(wire
 		(pts
@@ -7881,6 +7809,16 @@
 	)
 	(wire
 		(pts
+			(xy 30.48 162.56) (xy 30.48 167.64)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d1c021ba-0be7-4b29-8046-cab3b83401ce")
+	)
+	(wire
+		(pts
 			(xy 153.67 101.6) (xy 153.67 96.52)
 		)
 		(stroke
@@ -7931,6 +7869,16 @@
 	)
 	(wire
 		(pts
+			(xy 33.02 139.7) (xy 33.02 160.02)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "da1b7faa-474d-4433-bb7f-cf4963095da1")
+	)
+	(wire
+		(pts
 			(xy 76.2 107.95) (xy 82.55 107.95)
 		)
 		(stroke
@@ -7958,6 +7906,16 @@
 			(type default)
 		)
 		(uuid "deca92fa-c5bd-470f-8020-df32441774ac")
+	)
+	(wire
+		(pts
+			(xy 43.18 162.56) (xy 40.64 162.56)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "df2bd4ab-5544-48ff-8bb3-ac22bb29f8c6")
 	)
 	(wire
 		(pts
@@ -8198,16 +8156,6 @@
 			(type default)
 		)
 		(uuid "fb898e48-7734-46f7-be28-a677ee2c268e")
-	)
-	(wire
-		(pts
-			(xy 38.1 165.1) (xy 38.1 170.18)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "fc57f282-8bd0-4b96-b8b1-cbfeccff27cb")
 	)
 	(wire
 		(pts
@@ -8871,7 +8819,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(uuid "0700fb96-0fe8-488d-ae8c-17bb8c0783d1")
-		(property "Reference" "FST1"
+		(property "Reference" "FST3253"
 			(at 72.39 138.43 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8975,7 +8923,7 @@
 		(instances
 			(project "usdx_kicad"
 				(path "/e65cc3c5-b1c3-4008-a533-1c3510284050"
-					(reference "FST1")
+					(reference "FST3253")
 					(unit 1)
 				)
 			)
@@ -10798,6 +10746,86 @@
 			(project "usdx_kicad"
 				(path "/e65cc3c5-b1c3-4008-a533-1c3510284050"
 					(reference "LM2596_board2")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "mySymbolLibrary:SMA_Connector")
+		(at 38.1 160.02 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "3030c69e-a8c1-4893-8988-1c925ea5a0ec")
+		(property "Reference" "U3"
+			(at 38.1 160.02 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "RX Input"
+			(at 38.608 156.464 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "myFootprintLibrary:SMA connector"
+			(at 37.592 151.638 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 38.1 160.02 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 38.1 160.02 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "2"
+			(uuid "11fb808e-fd3d-47a3-9fbd-490669685da7")
+		)
+		(pin "1"
+			(uuid "a41ff3c6-36df-4bce-afe9-0819f0feffba")
+		)
+		(instances
+			(project "usdx_kicad"
+				(path "/e65cc3c5-b1c3-4008-a533-1c3510284050"
+					(reference "U3")
 					(unit 1)
 				)
 			)
@@ -14315,88 +14343,6 @@
 		)
 	)
 	(symbol
-		(lib_id "Connector:Conn_Coaxial")
-		(at 38.1 160.02 0)
-		(mirror y)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "7be3633a-4f31-4c2d-a821-fe37ebe9328d")
-		(property "Reference" "J1"
-			(at 34.29 159.0431 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "RX input"
-			(at 43.434 162.56 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Connector_Coaxial:SMA_Molex_73251-1153_EdgeMount_Horizontal"
-			(at 38.1 160.02 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 38.1 160.02 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "coaxial connector (BNC, SMA, SMB, SMC, Cinch/RCA, LEMO, ...)"
-			(at 38.1 160.02 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "2"
-			(uuid "bb3612c5-83a8-4968-9a70-bc59b45b9dab")
-		)
-		(pin "1"
-			(uuid "9154e251-867e-4dd5-a188-ede746fe679a")
-		)
-		(instances
-			(project "usdx_kicad"
-				(path "/e65cc3c5-b1c3-4008-a533-1c3510284050"
-					(reference "J1")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "power:+3.3V")
 		(at 140.97 101.6 0)
 		(unit 1)
@@ -14475,7 +14421,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 27.94 166.37 0)
+		(at 30.48 167.64 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -14486,7 +14432,7 @@
 		(fields_autoplaced yes)
 		(uuid "7df55821-9aca-4e78-a5f9-5b58920066d1")
 		(property "Reference" "#PWR024"
-			(at 27.94 172.72 0)
+			(at 30.48 173.99 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14497,7 +14443,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 27.94 171.45 0)
+			(at 30.48 172.72 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -14507,7 +14453,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 27.94 166.37 0)
+			(at 30.48 167.64 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14518,7 +14464,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 27.94 166.37 0)
+			(at 30.48 167.64 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14529,7 +14475,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 27.94 166.37 0)
+			(at 30.48 167.64 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -16375,88 +16321,6 @@
 		)
 	)
 	(symbol
-		(lib_id "Connector:Conn_Coaxial")
-		(at 27.94 160.02 0)
-		(mirror y)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "adad64d4-683c-4f8a-bf0c-c8323d1fa32b")
-		(property "Reference" "J2"
-			(at 26.162 156.718 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "CLK2 output"
-			(at 33.02 162.56 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Connector_Coaxial:SMA_Molex_73251-1153_EdgeMount_Horizontal"
-			(at 27.94 160.02 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 27.94 160.02 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "coaxial connector (BNC, SMA, SMB, SMC, Cinch/RCA, LEMO, ...)"
-			(at 27.94 160.02 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "2"
-			(uuid "6e37e99f-d503-4180-802d-cb3c415761ba")
-		)
-		(pin "1"
-			(uuid "bef4e0cf-d3b7-4fc4-8f8a-7243eeb36d74")
-		)
-		(instances
-			(project "usdx_kicad"
-				(path "/e65cc3c5-b1c3-4008-a533-1c3510284050"
-					(reference "J2")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "Device:L_Ferrite_Small")
 		(at 134.62 175.26 270)
 		(unit 1)
@@ -16547,7 +16411,6 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "b461167f-f70d-4f7f-9b39-b6ea07172011")
 		(property "Reference" "J4"
 			(at 166.37 109.22 90)
@@ -16560,7 +16423,7 @@
 			)
 		)
 		(property "Value" "PWR SWR meter"
-			(at 166.37 111.76 90)
+			(at 179.07 105.41 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -18883,6 +18746,86 @@
 		)
 	)
 	(symbol
+		(lib_id "mySymbolLibrary:SMA_Connector")
+		(at 27.94 160.02 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "e0a757db-ef92-41d7-9b95-379fa5485ae3")
+		(property "Reference" "U4"
+			(at 27.94 160.02 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "TX Out"
+			(at 28.448 156.464 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "myFootprintLibrary:SMA connector"
+			(at 27.432 151.638 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 27.94 160.02 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 27.94 160.02 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "2"
+			(uuid "51dcecde-7523-4b95-85a6-8f8a0a6b68fa")
+		)
+		(pin "1"
+			(uuid "d83e6904-988e-4e34-88f1-86d84bf743bf")
+		)
+		(instances
+			(project "usdx_kicad"
+				(path "/e65cc3c5-b1c3-4008-a533-1c3510284050"
+					(reference "U4")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "power:GND")
 		(at 226.06 80.01 90)
 		(unit 1)
@@ -19823,7 +19766,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Espressif:ESP32-S3-DevKitC"
+		(property "Footprint" "myFootprintLibrary:ESP32-S3-DevKitC-Mine"
 			(at 92.71 49.53 0)
 			(hide yes)
 			(show_name no)
