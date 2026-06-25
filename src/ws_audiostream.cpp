@@ -59,6 +59,7 @@ bool WSAudioStream::begin(
  * ========================================================= */
 void WSAudioStream::pushSample(int32_t freq_hz, int16_t sample)
 {
+
     if (!started)
         return;
 
@@ -135,7 +136,6 @@ void WSAudioStream::taskLoop()
     TextFrame*  t;
 
     uint8_t audioPacket[16 + WS_AUDIO_BUF_SAMPLES * 2];
-
     for (;;)
     {
         /* -------------------------
@@ -180,14 +180,15 @@ void WSAudioStream::taskLoop()
         {
             lastReport = millis();
 
-            // Serial.printf(
-            //     "audioQ=%u textQ=%u freeA=%u freeT=%u clients=%u\n",
-            //     uxQueueMessagesWaiting(_audioQueue),
-            //     uxQueueMessagesWaiting(_textQueue),
-            //     uxQueueMessagesWaiting(_freeQueue),
-            //     uxQueueMessagesWaiting(_textFreeQueue),
-            //     _ws.connectedClients()
-            // );
+            Serial.printf(
+                "framesSent=%d audioQ=%u textQ=%u freeA=%u freeT=%u clients=%u\n",
+                _framesSent,
+                uxQueueMessagesWaiting(_audioQueue),
+                uxQueueMessagesWaiting(_textQueue),
+                uxQueueMessagesWaiting(_freeQueue),
+                uxQueueMessagesWaiting(_textFreeQueue),
+                _ws.connectedClients()
+            );
         }
     }
 }
