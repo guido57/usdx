@@ -28,10 +28,9 @@ void AntennaFilters::begin()
     if (Wire.endTransmission() != 0)
     {
         Serial.println("MCP23017 NOT found");
-        while (1);
-    }
-
-    Serial.println("MCP23017 detected");
+        // while (1);
+    }else
+        Serial.println("MCP23017 detected");
 
     writeRegister(IODIRA, 0x00);
     writeRegister(IODIRB, 0x00);
