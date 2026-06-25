@@ -189,7 +189,7 @@ public:
       if(fout > 300000000){ i/=3; q/=3; fout/=3; }  // for higher freqs, use 3rd harmonic
       if(fout < 500000){ rdiv = 7; fout *= 128; } // Divide by 128 for fout 4..500kHz
       uint16_t d; if(fout < 30000000) d = (16 * fxtal) / fout; else d = (32 * fxtal) / fout;  // Integer part  .. maybe 44?
-      if(fout < 3500000) d = (7 * fxtal) / fout;  // PLL at 189MHz to cover 160m (freq>1.48MHz) when using 27MHz crystal
+     //if(fout < 3500000) d = (7 * fxtal) / fout;  // PLL at 189MHz to cover 160m (freq>1.48MHz) when using 27MHz crystal
       if(fout > 140000000) d = 4; // for f=140..300MHz; AN619; 4.1.3, this implies integer mode
       if(d % 2) d++;  // even numbers preferred for divider (AN619 p.4 and p.6)
       if( (d * (fout - 5000) / fxtal) != (d * (fout + 5000) / fxtal) ) d += 2; // Test if multiplier remains same for freq deviation +/- 5kHz, if not use different divider to make same
@@ -346,6 +346,8 @@ static inline int32_t programSi5351Rx(SI5351& si5351, const Si5351RxSynthState& 
   // - CW : si5351.freq(freq + cw_offset, rx_ph_q, 0)
   // - RIT applied via freq_calc_fast() + SendPLLRegisterBulk()
   
+  Serial.printf("[programSi5351Rx] fxtal=%uHz vfo=%ldHz mode=%u rit=%d ritActive=%d cwOffset=%d iqPhase=%d driveStrength=%u\n",
+                s.fxtalHz, (long)s.vfoHz, s.mode, (int)s.rit, s.ritActive ? 1 : 0, (int)s.cwOffset, (int)s.iqPhase, s.driveStrength);
 
   // Use IQ phase from state structure
   const uint16_t rx_ph_q = s.iqPhase;
