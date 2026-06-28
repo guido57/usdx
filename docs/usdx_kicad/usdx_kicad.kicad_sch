@@ -9882,7 +9882,7 @@
 		(dnp no)
 		(uuid "15d74b67-22e6-404a-820e-c9d373b598dd")
 		(property "Reference" "C25"
-			(at 257.048 115.57 0)
+			(at 256.54 113.792 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -9893,7 +9893,7 @@
 			)
 		)
 		(property "Value" "10u"
-			(at 259.334 124.46 0)
+			(at 256.794 116.586 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -11492,7 +11492,7 @@
 				)
 			)
 		)
-		(property "Value" "Power Connector"
+		(property "Value" "Power Connector 19V"
 			(at 221.615 74.93 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14038,7 +14038,7 @@
 		(dnp no)
 		(uuid "780dabe0-e8ff-40b9-98bc-fdf6a03cb08d")
 		(property "Reference" "C26"
-			(at 252.222 119.634 0)
+			(at 250.698 113.792 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -14678,7 +14678,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "1000u"
+		(property "Value" "1000u 35V"
 			(at 257.81 81.6609 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -17853,7 +17853,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "1000u"
+		(property "Value" "1000u 16V"
 			(at 270.51 152.7809 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -18479,7 +18479,7 @@
 		(dnp no)
 		(uuid "dd916537-aa4f-40d7-b64c-bdeb0754321c")
 		(property "Reference" "C4"
-			(at 269.24 119.7609 0)
+			(at 263.906 113.792 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -18489,8 +18489,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "1000u"
-			(at 266.446 124.714 0)
+		(property "Value" "1000u 16V"
+			(at 263.652 116.586 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
