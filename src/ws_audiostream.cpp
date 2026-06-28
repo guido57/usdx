@@ -1,7 +1,8 @@
 #include "ws_audiostream.h"
 
 extern uint64_t utc_ms();
-
+extern bool ethConnected; // declared in wifi_config.cpp
+  
 /* =========================================================
  * Constructor
  * ========================================================= */
@@ -145,7 +146,7 @@ void WSAudioStream::taskLoop()
         {
             encodeAudioPacket(audioPacket, a);
 
-            if (_ws.connectedClients() > 0)
+            if (_ws.connectedClients() > 0 && ethConnected)
             {
                 _ws.broadcastBIN(
                     audioPacket,
@@ -161,7 +162,7 @@ void WSAudioStream::taskLoop()
          * ------------------------- */
         if (xQueueReceive(_textQueue, &t, 0) == pdTRUE)
         {
-            if (_ws.connectedClients() > 0)
+            if (_ws.connectedClients() > 0 && ethConnected)
             {
                 _ws.broadcastTXT(t->data, t->len);
             }
