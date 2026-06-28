@@ -26,7 +26,8 @@
 // #include "ft8_decoder.h"
 #include "ft8_consumer_module.h"
 #include "ws_audiostream.h"
-  
+#include "rgb.h"
+
 static SI5351 si5351;
 FT8_TX ft8tx(si5351);
 FT8FreqOptimizer ft8FreqOptimizer;
@@ -442,6 +443,8 @@ void setup() {
   Serial.begin(115200); 
   delay(1000); 
 
+  RGB::startupTest();  
+
   // Test PSRAM availability
   Serial.printf("\n=== Memory Status ===\n");
   Serial.printf("Total heap: %u bytes\n", ESP.getHeapSize());
@@ -503,10 +506,12 @@ void setup() {
   if (si5351.i2cError() != 0) {
     Serial.printf("SI5351 I2C error during programming: %u. Synth disabled.\n", si5351.i2cError());
     synthInitialized = false;
-    return;
+    RGB::si5351(false);
+    //return;
   }else {
     Serial.printf("SI5351 programmed successfully.\n");
     synthInitialized = true;
+    RGB::si5351(true);
   }
   lastSynth = si5351_now;
 
@@ -772,7 +777,7 @@ void loop() {
   //   lastStatPrint = millis();
   // }
 
-
+  RGB::update();
 
 
 }

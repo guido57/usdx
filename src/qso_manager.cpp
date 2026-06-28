@@ -4,6 +4,7 @@
 #include "adif.h"
 #include "pskreporter.h"
 #include <time.h>
+#include "rgb.h"
 extern FT8FreqOptimizer ft8FreqOptimizer; // declared in main.cpp
 extern std::vector<FT8_TX::TxJob> txJobs; // declared in ft8_tx.cpp
 extern QSOStats qsoStats; // declared in wifi_config.cpp 
@@ -891,6 +892,8 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
         // Serial.println("Decoded message " + String(msg) + " with unknown type: " + String(type) + ". Ignoring it.");
         return;
     }
+
+    RGB::ft8Decoded();
 
     // Serial.println("Processing message: " + String(msg) + " type=" + String(type) + " f.call1=" + String(f.call1) + " f.call2=" + String(f.call2) + " f.grid=" + String(f.grid) + " f.report=" + String(f.report) + " s.snr_db=" + String(s.snr_db));
 

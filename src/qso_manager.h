@@ -71,7 +71,6 @@ public:
     QSO * getQSOByFields(Ft8Fields &f);
     QSO* getQsoById(int qso_id);
 
-
     String getAllQSOsJson();
     void streamAllQSOsJson(WebServer &server);
     String getActiveQSOsJson();

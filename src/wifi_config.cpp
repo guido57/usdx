@@ -24,6 +24,7 @@
 #include "adif.h"
 #include "task_profilers.h"
 #include "ws_audiostream.h"
+#include "rgb.h"
 
 extern FT8_TX ft8tx; // declared in main.cpp
 extern FT8FreqOptimizer ft8FreqOptimizer; // declared in main.cpp
@@ -78,7 +79,8 @@ static bool wsServerStarted = false;
 static uint32_t lastReconnectMs = 0;
 static bool staConnecting = false;
 static uint32_t staStartMs = 0;
-
+bool ethConnected = false;
+    
 // static std::vector<Ft8Spot> ft8_spots;
 
 static String savedSsid;
@@ -385,16 +387,17 @@ static void handleApiStatus() {
 }
 
 static bool ethBeginWithReset() {
-    Serial.println("[ETH] Starting Ethernet...");
-    Serial.println("[ETH] Initializing SPI...");
-    SPI.begin(ETH_SPI_SCK, ETH_SPI_MISO, ETH_SPI_MOSI);
-
+    Serial.println("[ETH] Resetting W5500...");
     pinMode(ETH_PHY_RST, OUTPUT);
     digitalWrite(ETH_PHY_RST, LOW);
     delay(100);
     digitalWrite(ETH_PHY_RST, HIGH);
     delay(200);
 
+    Serial.println("[ETH] Initializing SPI...");
+    SPI.begin(ETH_SPI_SCK, ETH_SPI_MISO, ETH_SPI_MOSI);
+
+    Serial.println("[ETH] Starting Ethernet...");
     bool ret = ETH.begin(
         ETH_PHY_W5500,
         ETH_PHY_ADDR,
@@ -735,7 +738,7 @@ static void startWebServer() {
     server.serveStatic("/app.js", LittleFS, "/app.js");
     server.serveStatic("/style.css", LittleFS, "/style.css");
     server.serveStatic("/cty_extended.dat", LittleFS, "/cty_extended.dat");
-    server.serveStatic("/favicon.ico", LittleFS, "/favicon.png");
+    server.serveStatic("/favicon.ico", LittleFS, "/favicon.ico");
 
     server.on("/api/status", HTTP_GET, handleApiStatus);
     server.on("/api/ui", HTTP_GET, handleApiUi);
@@ -899,7 +902,6 @@ void NetworkTask(void* pvParameters) {
     static constexpr uint32_t ETH_REINIT_AFTER_DOWN_MS = 15000;
     static constexpr uint32_t ETH_REINIT_COOLDOWN_MS = 5000;
 
-    bool ethConnected = false;
     uint32_t ethDownSince = 0;
     uint32_t lastReinitMs = 0;
 
@@ -907,6 +909,8 @@ void NetworkTask(void* pvParameters) {
     if (ethBeginWithReset() && ethWaitLinkAndIp(ETH_IP_WAIT_MS)) {
         Serial.printf("[ETH] Connected, IP=%s\n", ETH.localIP().toString().c_str());
         ethConnected = true;
+        RGB::ethernetLink(true);
+        RGB::ipAssigned(true);
         setup_time_once();
     } else {
         Serial.println("[ETH] Initial link/IP not ready, entering reconnect loop");
@@ -947,12 +951,16 @@ void NetworkTask(void* pvParameters) {
                 Serial.printf("[ETH] Recovered, IP=%s\n", ETH.localIP().toString().c_str());
                 setup_time_once();
                 ethConnected = true;
+                RGB::ethernetLink(true);
+                RGB::ipAssigned(true);
             }
             ethDownSince = 0;
         } else {
             if (ethConnected) {
                 Serial.println("[ETH] Link/IP lost");
                 ethConnected = false;
+                RGB::ethernetLink(false);
+                RGB::ipAssigned(false);
                 markEthDownStatus();
             }
 
@@ -972,8 +980,11 @@ void NetworkTask(void* pvParameters) {
                     setup_time_once();
                     ethConnected = true;
                     ethDownSince = 0;
+                    RGB::ethernetLink(true);
                 } else {
                     Serial.println("[ETH] Reinit failed, will retry");
+                    RGB::ethernetLink(false);
+                    RGB::ipAssigned(false);
                 }
             }
         }
@@ -1018,8 +1029,10 @@ void NetworkTask(void* pvParameters) {
         g_ft8ServerConnected = (wsServer.connectedClients() > 0);
         if (g_ft8ServerConnected) {
             g_ft8ServerActive = (millis() - g_ft8LastRxMs) < 15000;
+            RGB::websocketConnected(true);
         } else {
             g_ft8ServerActive = false;
+            RGB::websocketConnected(false);
         }
         netSectionAdd(NS_STATUS, esp_timer_get_time() - ts);
 
@@ -1265,7 +1278,6 @@ void listLittleFS() {
 
     Serial.println("--------------------------\n");
 }
-
 
 void listLogsFS() {
     Serial.println("\n--- LogsFS file list ---");

@@ -1,4 +1,5 @@
 #include "ant_filters.h"
+#include "rgb.h"
 
 #define IODIRA 0x00
 #define IODIRB 0x01
@@ -28,10 +29,12 @@ void AntennaFilters::begin()
     if (Wire.endTransmission() != 0)
     {
         Serial.println("MCP23017 NOT found");
+        RGB::mcp23017(false);
         // while (1);
-    }else
+    }else{
         Serial.println("MCP23017 detected");
-
+        RGB::mcp23017(true);
+    }    
     writeRegister(IODIRA, 0x00);
     writeRegister(IODIRB, 0x00);
 
