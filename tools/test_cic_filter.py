@@ -228,7 +228,7 @@ def plot_results(result):
 def analyze_results(result):
     """Print analysis of the results"""
     
-    print("\n=== CIC Filter Test Results ===\n")
+    print("\r\n=== CIC Filter Test Results ===\r\n")
     
     # Output counts
     print(f"Output samples: {len(result['i_cic'])} (CIC), {len(result['i_simple'])} (Simple)")
@@ -240,13 +240,13 @@ def analyze_results(result):
     q_cic_rms = np.sqrt(np.mean(result['q_cic']**2))
     q_simple_rms = np.sqrt(np.mean(result['q_simple']**2))
     
-    print(f"\nRMS Amplitude:")
+    print(f"\r\nRMS Amplitude:")
     print(f"  I channel - CIC: {i_cic_rms:.2f}, Simple: {i_simple_rms:.2f}")
     print(f"  Q channel - CIC: {q_cic_rms:.2f}, Simple: {q_simple_rms:.2f}")
     print(f"  Ratio (CIC/Simple): I={i_cic_rms/i_simple_rms:.3f}, Q={q_cic_rms/q_simple_rms:.3f}")
     
     # Peak values
-    print(f"\nPeak values:")
+    print(f"\r\nPeak values:")
     print(f"  I channel - CIC: {np.max(np.abs(result['i_cic']))}, Simple: {np.max(np.abs(result['i_simple'])):.0f}")
     print(f"  Q channel - CIC: {np.max(np.abs(result['q_cic']))}, Simple: {np.max(np.abs(result['q_simple'])):.0f}")
     
@@ -256,7 +256,7 @@ def analyze_results(result):
     q_cic_dc = np.mean(result['q_cic'])
     q_simple_dc = np.mean(result['q_simple'])
     
-    print(f"\nDC offset:")
+    print(f"\r\nDC offset:")
     print(f"  I channel - CIC: {i_cic_dc:.2f}, Simple: {i_simple_dc:.2f}")
     print(f"  Q channel - CIC: {q_cic_dc:.2f}, Simple: {q_simple_dc:.2f}")
     
@@ -271,7 +271,7 @@ def analyze_results(result):
     fund_freq = pos_freqs[fund_idx]
     fund_mag = pos_fft[fund_idx]
     
-    print(f"\nFundamental frequency: {fund_freq:.1f} Hz, magnitude: {fund_mag:.0f}")
+    print(f"\r\nFundamental frequency: {fund_freq:.1f} Hz, magnitude: {fund_mag:.0f}")
     
     # Check for harmonics
     for harmonic in [2, 3, 4]:
@@ -293,4 +293,4 @@ if __name__ == "__main__":
     analyze_results(result)
     plot_results(result)
     
-    print("\nTest complete!")
+    print("\r\nTest complete!")

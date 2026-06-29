@@ -182,7 +182,7 @@ void WSAudioStream::taskLoop()
             lastReport = millis();
 
             Serial.printf(
-                "framesSent=%d audioQ=%u textQ=%u freeA=%u freeT=%u clients=%u\n",
+                "framesSent=%d audioQ=%u textQ=%u freeA=%u freeT=%u clients=%u\r\n",
                 _framesSent,
                 uxQueueMessagesWaiting(_audioQueue),
                 uxQueueMessagesWaiting(_textQueue),

@@ -140,23 +140,23 @@ FT8_TX::TxJob * FT8_TX::getNextPendingJob(int qso_id) {
     // QSO * q = & qsoManager.qso_list[qso_id];
     QSO * q = qsoManager.getQsoById(qso_id);
     for (auto &j : txJobs) {
-        //Serial.printf("Examining job id=%u QSO id=%d\n", j.id, qso_id);
+        //Serial.printf("Examining job id=%u QSO id=%d\r\n", j.id, qso_id);
         if (j.qso_id == qso_id  && j.cancelled == false) { 
             return &j;
-            // Serial.printf("Cancelled job id=%u QSO=%d\n", j.id, qso_id);
+            // Serial.printf("Cancelled job id=%u QSO=%d\r\n", j.id, qso_id);
         }
     }
     return nullptr;
 }
 
 void FT8_TX::cancelJobsForQso(int qso_id) {
-    // Serial.printf("Cancelling jobs for QSO %d\n", qso_id);
+    // Serial.printf("Cancelling jobs for QSO %d\r\n", qso_id);
     QSO * q = & qsoManager.qso_list[qso_id];
     for (auto &j : txJobs) {
-        //Serial.printf("Examining job id=%u QSO id=%d\n", j.id, qso_id);
+        //Serial.printf("Examining job id=%u QSO id=%d\r\n", j.id, qso_id);
         if (j.qso_id == qso_id  ) { // Only cancel jobs that are for the same QSO and have a message type less than or equal to the current message type (to avoid cancelling newer jobs that may have been created after this message was sent)
             j.cancelled = true;
-            // Serial.printf("Cancelled job id=%u QSO=%d\n", j.id, qso_id);
+            // Serial.printf("Cancelled job id=%u QSO=%d\r\n", j.id, qso_id);
         }
     }
 }
@@ -226,7 +226,7 @@ void FT8_TX::taskLoop() {
 
             txJobs.push_back(job);
 
-            Serial.printf("[FT8] queued job id=%u QSO=%u parity=%d: %s\n",
+            Serial.printf("[FT8] queued job id=%u QSO=%u parity=%d: %s\r\n",
                         job.id, job.qso_id, job.parity, job.message);
         }
 
@@ -249,7 +249,7 @@ void FT8_TX::taskLoop() {
             // get the calculated ft8 offset
             uint16_t bestFt8Offset = 
                 ft8FreqOptimizer.best_freq(ui_get_vfo_freq(), false, false);
-            // Serial.printf("[FT8] applying best frequency offset of %d Hz\n", bestFt8Offset);
+            // Serial.printf("[FT8] applying best frequency offset of %d Hz\r\n", bestFt8Offset);
             setFt8Offset(bestFt8Offset); // save it to the UI state so it can be displayed and used for the next transmissions
         }   
 
@@ -260,13 +260,13 @@ void FT8_TX::taskLoop() {
         int64_t currentSlot = getNowMs() / 15000LL;
 
         for (auto &j : txJobs) {
-            // Serial.printf("[FT8] examining job id=%u QSO=%u parity=%d targetSlot=%lld cancelled=%d: %s\n",
+            // Serial.printf("[FT8] examining job id=%u QSO=%u parity=%d targetSlot=%lld cancelled=%d: %s\r\n",
             //               j.id, j.qso_id, j.parity, j.targetSlot, j.cancelled, j.message);
             if (j.cancelled) continue;
 
             // not yet time → skip
             if (j.targetSlot > currentSlot + 1){
-                // Serial.printf("[FT8] job id=%u not eligible yet (targetSlot=%lld currentSlot=%lld), skipping\n", j.id, j.targetSlot, currentSlot);
+                // Serial.printf("[FT8] job id=%u not eligible yet (targetSlot=%lld currentSlot=%lld), skipping\r\n", j.id, j.targetSlot, currentSlot);
                 continue;
 
             } 
@@ -276,7 +276,7 @@ void FT8_TX::taskLoop() {
             }
         }
         if(best)
-            Serial.printf("[FT8] currentSlot=%lld selected job id=%u QSO=%u parity=%d targetSlot=%lld: %s\n",
+            Serial.printf("[FT8] currentSlot=%lld selected job id=%u QSO=%u parity=%d targetSlot=%lld: %s\r\n",
                        currentSlot, best ? best->id : 0, best ? best->qso_id : 0, best ? best->parity : 255, best ? best->targetSlot : 0, best ? best->message : "N/A");
         // --------------------------------------------------------
         // 4) Enforce parity
@@ -284,7 +284,7 @@ void FT8_TX::taskLoop() {
         int64_t txSlot = currentSlot + 1;
 
         if (best && best->parity != 255 && (txSlot & 1) != best->parity) {
-            Serial.printf("[FT8] job %u parity mismatch, skipping\n", best->id);
+            Serial.printf("[FT8] job %u parity mismatch, skipping\r\n", best->id);
             best = nullptr;
         }
         // --------------------------------------------------------
@@ -310,7 +310,7 @@ void FT8_TX::taskLoop() {
 
             best->baseFreq = ui_get_vfo_freq() + ui_get_ft8_offset(); 
             
-            // Serial.printf("[FT8] TX job %u: %s\n", best->id, best->message);
+            // Serial.printf("[FT8] TX job %u: %s\r\n", best->id, best->message);
             best ->transmitting = true; // Mark job as transmitting for UI purposes (not used in scheduling logic)
 
             uint32_t startTime = esp_timer_get_time();
@@ -358,7 +358,7 @@ void FT8_TX::taskLoop() {
             antFilters->setRx();
             audioVolume = ui_get_volume();
 
-            // Serial.printf("[FT8] TX done job %u\n", best->id);
+            // Serial.printf("[FT8] TX done job %u\r\n", best->id);
 
             // ----------------------------------------------------
             // 7) Post-TX: QSO + retry logic
@@ -373,7 +373,7 @@ void FT8_TX::taskLoop() {
                 best->baseFreq);
 
             if (!txResult.ok) {
-                Serial.printf("[FT8] post-TX update failed for job %u: %s\n",
+                Serial.printf("[FT8] post-TX update failed for job %u: %s\r\n",
                               best->id,
                               txResult.error ? txResult.error : "unknown error");
                 best->cancelled = true;
@@ -381,7 +381,7 @@ void FT8_TX::taskLoop() {
             }
 
             if (!txResult.qsoIdMatched) {
-                Serial.printf("[FT8] Warning: QSO ID mismatch after TX. Expected %u, got %u\n",
+                Serial.printf("[FT8] Warning: QSO ID mismatch after TX. Expected %u, got %u\r\n",
                               best->qso_id,
                               txResult.qsoId);
             }
@@ -394,7 +394,7 @@ void FT8_TX::taskLoop() {
             } else if (best->retryCount >= ui_get_ft8_max_retries()) {
 
                 best->cancelled = true;
-                Serial.printf("[FT8] retry job %u MAX_RETRIES (%d) reached\n", best->id, ui_get_ft8_max_retries());
+                Serial.printf("[FT8] retry job %u MAX_RETRIES (%d) reached\r\n", best->id, ui_get_ft8_max_retries());
             } else {
 
                 best->retryCount++;
@@ -409,13 +409,13 @@ void FT8_TX::taskLoop() {
                 best->targetSlot = retrySlot;
                 best->cancelled = false;
 
-                // Serial.printf("[FT8] retry job %u nextSlot=%lld\n",
+                // Serial.printf("[FT8] retry job %u nextSlot=%lld\r\n",
                 //               best->id, retrySlot);
             }
         }
         else {
             // No TX this slot
-            // Serial.printf("[FT8] idle slot\n");
+            // Serial.printf("[FT8] idle slot\r\n");
         }
 
         // --------------------------------------------------------
@@ -441,7 +441,7 @@ void FT8_TX::taskLoop() {
                     if (q.cq && !q.is_mine && q.state == QSO_CQ) {
                         float score = qsoStats.scoreCQ(q.call1, q.grid1, q.dxcc1, q.snr1, ui_get_vfo_freq(), now_epoch);
                         q.score1 = score;
-                        //  Serial.printf("[FT8] To get best score, examining CQ from %s with score %.1f against bestScore %.1f\n", q.call1, score, bestScore);   
+                        //  Serial.printf("[FT8] To get best score, examining CQ from %s with score %.1f against bestScore %.1f\r\n", q.call1, score, bestScore);   
                         if (score > bestScore) {
                             bestCQ = &q;
                             bestScore = score;
@@ -455,7 +455,7 @@ void FT8_TX::taskLoop() {
 
                     if (reply.length() > 0) {
                         uint8_t parity = getSlotParity(bestCQ->lastHeard);
-                        Serial.printf("[FT8] Auto-replying to CQ from %s with: %s parity=%d\n", 
+                        Serial.printf("[FT8] Auto-replying to CQ from %s with: %s parity=%d\r\n", 
                             bestCQ->call1, reply.c_str(), !parity );
                         requestTransmission(ui_get_vfo_freq() + ui_get_ft8_offset(), reply.c_str(), MSG_CALL, !parity, bestCQ->qso_id);
                     }

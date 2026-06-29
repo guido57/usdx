@@ -119,7 +119,7 @@ echo ";UA1;" > /tmp/ttyS0;
 
 4. Instead of step 3, you could visualize uSDX console:
 
-clear; echo ";UA1;UD;" > /tmp/ttyS0; cat /tmp/ttyS0 | while IFS= read -d \; c; do echo "${c}" |sed -E  's/^UD..(.+)$|^[^U][^D](.*)$/\1/g'| sed -E 's/^(.{16})(.+)$/\x1B[;1H\x1B[1m\x1B[44m\x1B[97m\1\x1B[0m\x1B[K\n\x1B[1m\x1B[44m\x1B[97m\2\x1B[0m\x1B[K\n\x1B[K\n\x1B[K/g'; echo ";UD;UD;" >> /tmp/ttyS0; sleep 1; done
+clear; echo ";UA1;UD;" > /tmp/ttyS0; cat /tmp/ttyS0 | while IFS= read -d \; c; do echo "${c}" |sed -E  's/^UD..(.+)$|^[^U][^D](.*)$/\1/g'| sed -E 's/^(.{16})(.+)$/\x1B[;1H\x1B[1m\x1B[44m\x1B[97m\1\x1B[0m\x1B[K\r\n\x1B[1m\x1B[44m\x1B[97m\2\x1B[0m\x1B[K\r\n\x1B[K\r\n\x1B[K/g'; echo ";UD;UD;" >> /tmp/ttyS0; sleep 1; done
 
 Use pavumeter to set the correct mixer settings
 

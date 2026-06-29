@@ -202,7 +202,7 @@ static void loadSettings() {
   ft8_offset = constrain(s.ft8_offset, 0, 3000);
   ft8_offset_enabled = (s.ft8_offset_enabled != 0);
   strlcpy(ft8_testmsg, s.ft8_testmsg, sizeof(ft8_testmsg));
-  Serial.printf("Loaded settings: ft8_mode=%d\n", s.ft8_mode);
+  Serial.printf("Loaded settings: ft8_mode=%d\r\n", s.ft8_mode);
   ft8_mode = constrain(s.ft8_mode, 0, 2);
   ft8_max_retries = constrain(s.ft8_max_retries, 0, 10);
   ft8_send_parity = constrain(s.ft8_send_parity, 0, 2);
@@ -251,7 +251,7 @@ bool ui_get_settings(UiSettings* out) {
   out->ft8_offset = ft8_offset;
   out->ft8_offset_enabled = ft8_offset_enabled ? 1 : 0;
   strlcpy(out->ft8_testmsg, ft8_testmsg, sizeof(out->ft8_testmsg));
-  // Serial.printf("Getting settings: ft8_mode=%d\n", ft8_mode);
+  // Serial.printf("Getting settings: ft8_mode=%d\r\n", ft8_mode);
   out->ft8_mode = ft8_mode;
   out->ft8_max_retries = ft8_max_retries;
   out->ft8_send_parity = ft8_send_parity;
@@ -287,7 +287,7 @@ void ui_apply_settings(const UiSettings& s) {
   ft8_offset = constrain(s.ft8_offset, 0, 3000);
   ft8_offset_enabled = (s.ft8_offset_enabled != 0);
   strlcpy(ft8_testmsg, s.ft8_testmsg, sizeof(ft8_testmsg));
-  Serial.printf("Applying settings: ft8_mode=%d\n", s.ft8_mode);
+  Serial.printf("Applying settings: ft8_mode=%d\r\n", s.ft8_mode);
   ft8_mode = constrain(s.ft8_mode, 0, 2);
   ft8_max_retries = constrain(s.ft8_max_retries, 0, 10);
   ft8_send_parity = constrain(s.ft8_send_parity, 0, 2);
@@ -300,7 +300,7 @@ void ui_apply_settings(const UiSettings& s) {
   strlcpy(mysoftware, s.mysoftware, sizeof(mysoftware));
   strlcpy(myrig, s.myrig, sizeof(myrig));
   bandval = constrain(s.bandval, 0, (int32_t)N_BANDS - 1);
-  Serial.printf("Applying settings: vfoA=%u, vfoB=%u, vfoSel=%u, mode=%u, bandval=%u\n", s.vfoA, s.mode, s.bandval);
+  Serial.printf("Applying settings: vfoA=%u, vfoB=%u, vfoSel=%u, mode=%u, bandval=%u\r\n", s.vfoA, s.mode, s.bandval);
   volume = constrain(s.volume, (int8_t)0, (int8_t)10);
   filt = constrain(s.filt, (int8_t)0, (int8_t)7);
   agc = constrain(s.agc, (int8_t)0, (int8_t)1);
@@ -339,7 +339,7 @@ static void saveSettings() {
   s.ft8_offset = ft8_offset;
   s.ft8_offset_enabled = ft8_offset_enabled ? 1 : 0;
   strlcpy(s.ft8_testmsg, ft8_testmsg, sizeof(s.ft8_testmsg));
-  // Serial.printf("Saving settings: ft8_mode=%d\n", ft8_mode);  
+  // Serial.printf("Saving settings: ft8_mode=%d\r\n", ft8_mode);  
   s.ft8_mode = ft8_mode;
   s.ft8_max_retries = ft8_max_retries;
   s.ft8_send_parity = ft8_send_parity;
@@ -352,7 +352,7 @@ static void saveSettings() {
   strlcpy(s.mysoftware, mysoftware, sizeof(s.mysoftware));
   strlcpy(s.myrig, myrig, sizeof(s.myrig));
   s.bandval = bandval;
-  // Serial.printf("Saving settings: vfoA=%u, vfoB=%u, vfoSel=%u, mode=%u, bandval=%u\n", s.vfoA, s.vfoB, s.vfoSel, s.mode, s.bandval);
+  // Serial.printf("Saving settings: vfoA=%u, vfoB=%u, vfoSel=%u, mode=%u, bandval=%u\r\n", s.vfoA, s.vfoB, s.vfoSel, s.mode, s.bandval);
   s.volume = volume;
   s.filt = filt;
   s.agc = agc;
@@ -883,7 +883,7 @@ static void handleRotateFreq(int8_t direction) {
 
 static void handleButtonFreq(uint8_t id, bool pressed) {
   
-  Serial.printf("Button Freq %d %s\n", id, pressed ? "pressed" : "released");  
+  Serial.printf("Button Freq %d %s\r\n", id, pressed ? "pressed" : "released");  
   
   const uint32_t LONG_PRESS_MS = 600;
   const uint32_t DOUBLE_MS = 350;
@@ -952,7 +952,7 @@ static void handleRotateMenu(int8_t direction) {
 // detects short press, long press and push-turn for the menu button
 static void handleButtonMenu(uint8_t id, bool pressed) {
 
-  Serial.printf("Button Menu %d %s\n", id, pressed ? "pressed" : "released");  
+  Serial.printf("Button Menu %d %s\r\n", id, pressed ? "pressed" : "released");  
   
   const uint32_t LONG_PRESS_MS = 600;
   ButtonTracker& b = btn[id]; 

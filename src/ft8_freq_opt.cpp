@@ -129,15 +129,15 @@ uint16_t FT8FreqOptimizer::best_freq(uint32_t base_freq_hz, bool collision_predi
             best_bin = i;
         }
         // if(activity[i] > 0.01f)
-        //     Serial.printf("Bin %3d: Activity=%.2f, Score=%.2f\n", i, activity[i], score);
+        //     Serial.printf("Bin %3d: Activity=%.2f, Score=%.2f\r\n", i, activity[i], score);
     }
 
-    // Serial.printf("Best bin: %d, Best freq: %u Hz, Activity=%.2f, Score=%.2f\n", best_bin, bin_to_hz(best_bin), decayed[best_bin], best_score);
+    // Serial.printf("Best bin: %d, Best freq: %u Hz, Activity=%.2f, Score=%.2f\r\n", best_bin, bin_to_hz(best_bin), decayed[best_bin], best_score);
     // Serial.printf("Activity around best bin: ");
     // int start_bin = max(0, best_bin - 5);
     // int end_bin = min(NUM_BINS - 1, best_bin + 5);
     // for (int i = start_bin; i <= end_bin; i++) {
-    //         Serial.printf("Bin %3d  Freq %u Hz:  Activity=%.2f, CQ Density=%.2f\n", i, bin_to_hz(i), decayed[i], cq_density[i]);
+    //         Serial.printf("Bin %3d  Freq %u Hz:  Activity=%.2f, CQ Density=%.2f\r\n", i, bin_to_hz(i), decayed[i], cq_density[i]);
     // }
     
     return  bin_to_hz(best_bin);

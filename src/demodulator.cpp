@@ -39,7 +39,7 @@ static inline int32_t magn32(int16_t i, int16_t q) {
 int16_t demod_process(int16_t i_sample, int16_t q_sample, DemodMode mode) {
   static DemodMode last_mode = (DemodMode)-1;
   if (mode != last_mode) {
-    // Serial.printf("DEMOD_MODE CHANGE: %d\n", (int)mode);
+    // Serial.printf("DEMOD_MODE CHANGE: %d\r\n", (int)mode);
     last_mode = mode;
   }
   
@@ -77,7 +77,7 @@ int16_t qh = (int16_t)qh_f;
   if (debug_count >= 8000) { // Once per second at 8kHz
       float i_rms = sqrtf(i_sum_sq / 8000.0f);
       float qh_rms = sqrtf(qh_sum_sq / 8000.0f);
-      // Serial.printf("[Demod Debug] I_RMS: %.1f | QH_RMS: %.1f | Ratio: %.2f\n", 
+      // Serial.printf("[Demod Debug] I_RMS: %.1f | QH_RMS: %.1f | Ratio: %.2f\r\n", 
       //               i_rms, qh_rms, qh_rms/i_rms);
       i_sum_sq = 0; qh_sum_sq = 0; debug_count = 0;
   }

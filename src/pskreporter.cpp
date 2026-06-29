@@ -140,14 +140,14 @@ static bool send_udp_packet(const uint8_t* packet,
     }
 
     if (!g_psk_udp.beginPacket(host, port)) {
-        Serial.printf("[psk] beginPacket failed host=%s port=%u\n", host, (unsigned)port);
+        Serial.printf("[psk] beginPacket failed host=%s port=%u\r\n", host, (unsigned)port);
         return false;
     }
 
     const size_t written = g_psk_udp.write(packet, packet_len);
     const int rc = g_psk_udp.endPacket();
     if (written != packet_len || rc == 0) {
-        Serial.printf("[psk] send failed: host=%s port=%u wrote=%u/%u rc=%d\n",
+        Serial.printf("[psk] send failed: host=%s port=%u wrote=%u/%u rc=%d\r\n",
                       host,
                       (unsigned)port,
                       (unsigned)written,
@@ -156,7 +156,7 @@ static bool send_udp_packet(const uint8_t* packet,
         return false;
     }
 
-    // Serial.printf("[psk] send ok: host=%s port=%u wrote=%u src.freq=%u tx.freq=%u\n",
+    // Serial.printf("[psk] send ok: host=%s port=%u wrote=%u src.freq=%u tx.freq=%u\r\n",
     //               host,
     //               (unsigned)port,
     //               (unsigned)written,
@@ -205,7 +205,7 @@ void send_pskreporter_packet(const Ft8Spot& spot)
         return;
     }
     // else
-    //     Serial.printf("[psk] receiver block: %s\n", (char *) receiver_body);
+    //     Serial.printf("[psk] receiver block: %s\r\n", (char *) receiver_body);
 
     uint8_t sender_body[160];
     size_t sender_body_len = 0;
@@ -307,11 +307,11 @@ void send_pskreporter_packet(const Ft8Spot& spot)
     //                                            14739,
     //                                            spot.freq_hz);
 
-    // Serial.printf("[psk] tx summary: prod=%s analyzer=%s\n",
+    // Serial.printf("[psk] tx summary: prod=%s analyzer=%s\r\n",
     //               sent_prod ? "ok" : "fail",
     //               sent_analyzer ? "ok" : "fail");
 
-    // Serial.printf("tx.freq bytes %02X %02X %02X %02X\n",
+    // Serial.printf("tx.freq bytes %02X %02X %02X %02X\r\n",
     //               spot.freq_hz & 0xFF,
     //               (spot.freq_hz >> 8) & 0xFF,
     //               (spot.freq_hz >> 16) & 0xFF,

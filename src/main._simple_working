@@ -98,7 +98,7 @@
 //       float elapsedSec = (now - lastReportMs) / 1000.0f;
 //       float rate = rawSampleCount / elapsedSec;
       
-//       Serial.printf("[ADC Stats] Raw Rate: %.1f Hz | Target: 32000 Hz | Audio Rate: %.1f Hz\n", 
+//       Serial.printf("[ADC Stats] Raw Rate: %.1f Hz | Target: 32000 Hz | Audio Rate: %.1f Hz\r\n", 
 //                     rate, rate / 4.0f);
       
 //       rawSampleCount = 0;
@@ -406,7 +406,7 @@
 //         double ratio = (strong + 1e-12) / (weak + 1e-12);
 //         double ratio_db = 10.0 * log10(ratio);
 //         const char* strong_label = (p_pos > p_neg) ? "+1k" : "-1k";
-//         Serial.printf("[Image Reject @1k] +1k=%.3e -1k=%.3e strong=%s ratio=%.2f dB (%.3fx)\n",
+//         Serial.printf("[Image Reject @1k] +1k=%.3e -1k=%.3e strong=%s ratio=%.2f dB (%.3fx)\r\n",
 //                       p_pos, p_neg, strong_label, ratio_db, ratio);
 
 //         ir_sum_re_pos = 0.0;
@@ -464,10 +464,10 @@
 //         // Post-balance amplitude ratio (apply balance factor to Q RMS)
 //         float ratio_post = (q_rms_pre * iq_balance) / (i_rms_pre + 0.001f);
 
-//         Serial.printf("[After Phase Correction] Amp ratio=%.3f, Phase deviation=%.1f deg\n",
+//         Serial.printf("[After Phase Correction] Amp ratio=%.3f, Phase deviation=%.1f deg\r\n",
 //                       ratio_pre, phase_pre);
-//         Serial.printf("[After Balance] Amp ratio=%.3f\n", ratio_post);
-//         Serial.printf("[Settings] IQ Bal=%d, IQ Phase=%d\n",
+//         Serial.printf("[After Balance] Amp ratio=%.3f\r\n", ratio_post);
+//         Serial.printf("[Settings] IQ Bal=%d, IQ Phase=%d\r\n",
 //                       (int)(iq_balance * 100), phase_deg);
 
 //         // Reset accumulators
@@ -514,7 +514,7 @@
 //         const double p2 = v_re2 * v_re2 + v_im2 * v_im2;
 //         const double ratio = (p2 + 1e-12) / (p1 + 1e-12);
 //         const double ratio_db = 10.0 * log10(ratio);
-//         Serial.printf("[AM Test] 1k=%.3e 2k=%.3e 2k/1k=%.2f dB\n", p1, p2, ratio_db);
+//         Serial.printf("[AM Test] 1k=%.3e 2k=%.3e 2k/1k=%.2f dB\r\n", p1, p2, ratio_db);
 //         v_re1 = v_im1 = v_re2 = v_im2 = 0.0;
 //         v_count = 0;
 //       }
@@ -625,26 +625,26 @@
 // //   delay(1000); 
 
 // //   // Test PSRAM availability
-// //   Serial.printf("\n=== Memory Status ===\n");
-// //   Serial.printf("Total heap: %u bytes\n", ESP.getHeapSize());
-// //   Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
-// //   Serial.printf("PSRAM size: %u bytes\n", ESP.getPsramSize());
-// //   Serial.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());
+// //   Serial.printf("\r\n=== Memory Status ===\r\n");
+// //   Serial.printf("Total heap: %u bytes\r\n", ESP.getHeapSize());
+// //   Serial.printf("Free heap: %u bytes\r\n", ESP.getFreeHeap());
+// //   Serial.printf("PSRAM size: %u bytes\r\n", ESP.getPsramSize());
+// //   Serial.printf("Free PSRAM: %u bytes\r\n", ESP.getFreePsram());
   
 // //   if (ESP.getPsramSize() > 0) {
-// //     Serial.printf("PSRAM is available!\n");
+// //     Serial.printf("PSRAM is available!\r\n");
 // //     // Try to allocate in PSRAM
 // //     void* psram_test = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM);
 // //     if (psram_test) {
-// //       Serial.printf("PSRAM allocation test: SUCCESS\n");
+// //       Serial.printf("PSRAM allocation test: SUCCESS\r\n");
 // //       heap_caps_free(psram_test);
 // //     } else {
-// //       Serial.printf("PSRAM allocation test: FAILED\n");
+// //       Serial.printf("PSRAM allocation test: FAILED\r\n");
 // //     }
 // //   } else {
-// //     Serial.printf("PSRAM is NOT available\n");
+// //     Serial.printf("PSRAM is NOT available\r\n");
 // //   }
-// //   Serial.printf("=====================\n\n");
+// //   Serial.printf("=====================\r\n\r\n");
 
 // //   // Serial.printf("Initialize shared I2C bus once (OLED + SI5351 use the same Wire instance).\r\n");
 // //   Wire.begin(I2C_SDA, I2C_SCL);
@@ -676,11 +676,11 @@
 
 // //   const int32_t programmedHz = programSi5351Rx(si5351, now);
 // //   if (si5351.i2cError() != 0) {
-// //     Serial.printf("SI5351 I2C error during programming: %u. Synth disabled.\n", si5351.i2cError());
+// //     Serial.printf("SI5351 I2C error during programming: %u. Synth disabled.\r\n", si5351.i2cError());
 // //     synthInitialized = false;
 // //     return;
 // //   }else {
-// //     Serial.printf("SI5351 programmed successfully.\n");
+// //     Serial.printf("SI5351 programmed successfully.\r\n");
 // //     synthInitialized = true;
 // //   }
 // //   lastSynth = now;
@@ -729,26 +729,26 @@ void setup() {
   delay(1000); 
 
     // Test PSRAM availability
-  Serial.printf("\n=== Memory Status ===\n");
-  Serial.printf("Total heap: %u bytes\n", ESP.getHeapSize());
-  Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
-  Serial.printf("PSRAM size: %u bytes\n", ESP.getPsramSize());
-  Serial.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());
+  Serial.printf("\r\n=== Memory Status ===\r\n");
+  Serial.printf("Total heap: %u bytes\r\n", ESP.getHeapSize());
+  Serial.printf("Free heap: %u bytes\r\n", ESP.getFreeHeap());
+  Serial.printf("PSRAM size: %u bytes\r\n", ESP.getPsramSize());
+  Serial.printf("Free PSRAM: %u bytes\r\n", ESP.getFreePsram());
   
   if (ESP.getPsramSize() > 0) {
-    Serial.printf("PSRAM is available!\n");
+    Serial.printf("PSRAM is available!\r\n");
     // Try to allocate in PSRAM
     void* psram_test = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM);
     if (psram_test) {
-      Serial.printf("PSRAM allocation test: SUCCESS\n");
+      Serial.printf("PSRAM allocation test: SUCCESS\r\n");
       heap_caps_free(psram_test);
     } else {
-      Serial.printf("PSRAM allocation test: FAILED\n");
+      Serial.printf("PSRAM allocation test: FAILED\r\n");
     }
   } else {
-    Serial.printf("PSRAM is NOT available\n");
+    Serial.printf("PSRAM is NOT available\r\n");
   }
-  Serial.printf("=====================\n\n");
+  Serial.printf("=====================\r\n\r\n");
 
   
   wifi_config_setup();
@@ -762,28 +762,28 @@ void setup() {
 //   delay(1000); 
 
 //   // Test PSRAM availability
-//   Serial.printf("\n=== Memory Status ===\n");
-//   Serial.printf("Total heap: %u bytes\n", ESP.getHeapSize());
-//   Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
-//   Serial.printf("PSRAM size: %u bytes\n", ESP.getPsramSize());
-//   Serial.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());
+//   Serial.printf("\r\n=== Memory Status ===\r\n");
+//   Serial.printf("Total heap: %u bytes\r\n", ESP.getHeapSize());
+//   Serial.printf("Free heap: %u bytes\r\n", ESP.getFreeHeap());
+//   Serial.printf("PSRAM size: %u bytes\r\n", ESP.getPsramSize());
+//   Serial.printf("Free PSRAM: %u bytes\r\n", ESP.getFreePsram());
   
 //   if (ESP.getPsramSize() > 0) {
-//     Serial.printf("PSRAM is available!\n");
+//     Serial.printf("PSRAM is available!\r\n");
 //     // Try to allocate in PSRAM
 //     void* psram_test = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM);
 //     if (psram_test) {
-//       Serial.printf("PSRAM allocation test: SUCCESS\n");
+//       Serial.printf("PSRAM allocation test: SUCCESS\r\n");
 //       heap_caps_free(psram_test);
 //     } else {
-//       Serial.printf("PSRAM allocation test: FAILED\n");
+//       Serial.printf("PSRAM allocation test: FAILED\r\n");
 //     }
 //   } else {
-//     Serial.printf("PSRAM is NOT available\n");
+//     Serial.printf("PSRAM is NOT available\r\n");
 //   }
-//   Serial.printf("=====================\n\n");
+//   Serial.printf("=====================\r\n\r\n");
 
-//   if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare Wire !!!\n");
+//   if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare Wire !!!\r\n");
   
 //   Serial.printf("Initialize shared I2C bus once (OLED + SI5351 use the same Wire instance).\r\n");
 //   Wire.begin(I2C_SDA, I2C_SCL);
@@ -805,25 +805,25 @@ void setup() {
 //     ui_get_iq_phase(),
 //   };
   
-//   if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare UI !!!\n");
+//   if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare UI !!!\r\n");
   
 //   Serial.printf("Initialize UI.\r\n");
 //   ui_setup();
 
 //   delay(500);
 
-//   if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare SI5351 !!!\n");
+//   if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare SI5351 !!!\r\n");
   
 //   si5351.fxtal = now.fxtalHz;
 //   si5351.powerDown();
 
 //   const int32_t programmedHz = programSi5351Rx(si5351, now);
 //   if (si5351.i2cError() != 0) {
-//     Serial.printf("SI5351 I2C error during programming: %u. Synth disabled.\n", si5351.i2cError());
+//     Serial.printf("SI5351 I2C error during programming: %u. Synth disabled.\r\n", si5351.i2cError());
 //     synthInitialized = false;
 //     return;
 //   }else {
-//     Serial.printf("SI5351 programmed successfully.\n");
+//     Serial.printf("SI5351 programmed successfully.\r\n");
 //     synthInitialized = true;
 //   }
 //   lastSynth = now;
@@ -859,7 +859,7 @@ void setup() {
 //   audioVolume = ui_get_volume(); // Initialize audio volume from UI setting
 
 //   // Start WiFi config (STA if credentials are valid, AP fallback if not)
-//   if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di chiamare wifi_config_setup() !!!\n");
+//   if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di chiamare wifi_config_setup() !!!\r\n");
   
 //   ft8tx.begin(7075000); // Set FT8 TX base frequency to 7075 kHz
 //   delay(5000); // Wait for everything to stabilize before starting WiFi (especially important if PSRAM is present)
@@ -899,7 +899,7 @@ void loop() {
 //     si5351.fxtal = now.fxtalHz;
 //     programSi5351Rx(si5351, now);
 //     lastSynth = now;
-//     printf("SI5351 reprogrammed due to UI change. freq=%u\n", now.vfoHz);  
+//     printf("SI5351 reprogrammed due to UI change. freq=%u\r\n", now.vfoHz);  
 //   }
 
 //   // ------------- ADC ATT --------------
@@ -927,10 +927,10 @@ void loop() {
 
 //   //   for(int i = 0; i < ft8FreqOptimizer.NUM_BINS; i++) {
 //   //     // if(ft8FreqOptimizer.activity[i] > 0 || ft8FreqOptimizer.cq_density[i] > 0)  
-//   //       // Serial.printf("bin %4d Hz: activity=%.2f cq=%.2f last_update=%u\n", 
+//   //       // Serial.printf("bin %4d Hz: activity=%.2f cq=%.2f last_update=%u\r\n", 
 //   //         //ft8FreqOptimizer.bin_to_hz(i), ft8FreqOptimizer.activity[i], ft8FreqOptimizer.cq_density[i], ft8FreqOptimizer.last_update[i]); 
 //   //   }   
-//   //   Serial.printf("best FT8 freq: %u Hz\n", bestFreqOffset);
+//   //   Serial.printf("best FT8 freq: %u Hz\r\n", bestFreqOffset);
 
 //   }
 // }
@@ -962,7 +962,7 @@ void loop() {
 //     si5351.fxtal = now.fxtalHz;
 //     programSi5351Rx(si5351, now);
 //     lastSynth = now;
-//     printf("SI5351 reprogrammed due to UI change. freq=%u\n", now.vfoHz);  
+//     printf("SI5351 reprogrammed due to UI change. freq=%u\r\n", now.vfoHz);  
 //   }
 
 //   // ------------- ADC ATT --------------
@@ -990,10 +990,10 @@ void loop() {
 
 //     for(int i = 0; i < ft8FreqOptimizer.NUM_BINS; i++) {
 //       // if(ft8FreqOptimizer.activity[i] > 0 || ft8FreqOptimizer.cq_density[i] > 0)  
-//         // Serial.printf("bin %4d Hz: activity=%.2f cq=%.2f last_update=%u\n", 
+//         // Serial.printf("bin %4d Hz: activity=%.2f cq=%.2f last_update=%u\r\n", 
 //           //ft8FreqOptimizer.bin_to_hz(i), ft8FreqOptimizer.activity[i], ft8FreqOptimizer.cq_density[i], ft8FreqOptimizer.last_update[i]); 
 //     }   
-//     Serial.printf("best FT8 freq: %u Hz\n", bestFreqOffset);
+//     Serial.printf("best FT8 freq: %u Hz\r\n", bestFreqOffset);
 
 //   }
 // }

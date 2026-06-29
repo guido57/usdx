@@ -81,7 +81,7 @@ bool Adif::enqueue(const QSO& qso, uint32_t freq_hz, char * bandname, char * mod
     String adif = buildAdif(qso, freq_hz, bandname, modename);
 
     strncpy(item.adif, adif.c_str(), sizeof(item.adif) - 1);
-    Serial.printf("[ADIF] Enqueuing QSO %d for upload: %s\n", item.qsoId, item.adif);
+    Serial.printf("[ADIF] Enqueuing QSO %d for upload: %s\r\n", item.qsoId, item.adif);
     // return xQueueSend(_queue, &item, 0) == pdTRUE;
     wifi_config_adif_push(item); // directly push to websocket queue for this simplified version
     return true; // we are not using the queue in this simplified version, so just return true

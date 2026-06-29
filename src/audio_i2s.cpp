@@ -117,14 +117,14 @@ bool audio_i2s_setup()
     esp_err_t err = i2s_driver_install(I2S_NUM_1, &i2s_config, 0, NULL);
     if (err != ESP_OK)
     {
-        Serial.printf("Failed to install I2S driver: %d\n", err);
+        Serial.printf("Failed to install I2S driver: %d\r\n", err);
         return false;
     }
 
     err = i2s_set_pin(I2S_NUM_1, &pin_config);
     if (err != ESP_OK)
     {
-        Serial.printf("Failed to set I2S pins: %d\n", err);
+        Serial.printf("Failed to set I2S pins: %d\r\n", err);
         i2s_driver_uninstall(I2S_NUM_1);
         return false;
     }
@@ -160,7 +160,7 @@ bool audio_i2s_setup()
 
     initialized = true;
 
-    Serial.printf("I2S initialized: %dHz stereo (mono via MAX98357), BCLK=%d, LRC=%d, DOUT=%d\n",
+    Serial.printf("I2S initialized: %dHz stereo (mono via MAX98357), BCLK=%d, LRC=%d, DOUT=%d\r\n",
                   AUDIO_I2S_SAMPLE_RATE, GPIO_I2S_BCLK, GPIO_I2S_LRC, GPIO_I2S_DOUT);
 
     return true;

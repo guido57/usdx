@@ -57,12 +57,12 @@ static T* allocPreferPsram(size_t count, const char* tag)
     }
 
     if (!ptr) {
-        Serial.printf("QSOStats: allocation failed for %s (%u bytes)\n", tag, (unsigned)bytes);
+        Serial.printf("QSOStats: allocation failed for %s (%u bytes)\r\n", tag, (unsigned)bytes);
         return nullptr;
     }
 
     memset(ptr, 0, bytes);
-    Serial.printf("QSOStats: allocated %s (%u bytes) in %s\n",
+    Serial.printf("QSOStats: allocated %s (%u bytes) in %s\r\n",
                   tag,
                   (unsigned)bytes,
                   allocated_in_psram ? "PSRAM" : "RAM");
@@ -274,12 +274,12 @@ bool QSOStats::loadCTYFromFile(const char* path)
 
     File f = LittleFS.open(path, "r");
     if (!f) {
-        Serial.printf("Failed to open CTY file: %s\n", path);
+        Serial.printf("Failed to open CTY file: %s\r\n", path);
         return false;
     }
 
     size_t size = f.size();
-    Serial.printf("CTY file size: %d bytes\n", (int)size);
+    Serial.printf("CTY file size: %d bytes\r\n", (int)size);
 
     // ⚠️ IMPORTANT: allocate buffer
     char* buffer = (char*)malloc(size + 1);
@@ -299,10 +299,10 @@ bool QSOStats::loadCTYFromFile(const char* path)
 
     free(buffer);
 
-    Serial.printf("Loaded %d prefixes\n", prefixCount);
+    Serial.printf("Loaded %d prefixes\r\n", prefixCount);
     for(int i = 0; i < prefixCount ; i++) {
         // if(prefixTable[i].dxcc == 318 /* China */ ) {
-        //     Serial.printf("Prefix: %s, DXCC: %d\n", prefixTable[i].prefix, prefixTable[i].dxcc);
+        //     Serial.printf("Prefix: %s, DXCC: %d\r\n", prefixTable[i].prefix, prefixTable[i].dxcc);
         // }
         
     }
@@ -312,7 +312,7 @@ bool QSOStats::loadCTYFromFile(const char* path)
 
 static inline char* ltrim(char* s)
 {
-    while (*s == ' ' || *s == '\n' || *s == '\r' || *s == '\t')
+    while (*s == ' ' || *s == '\r\n' || *s == '\r' || *s == '\t')
         s++;
     return s;
 }
@@ -324,7 +324,7 @@ void QSOStats::loadCTY(const char* text)
     }
 
     Serial.println("Loading CTY data...");
-    Serial.printf("CTY data length: %d\n", (int)strlen(text));
+    Serial.printf("CTY data length: %d\r\n", (int)strlen(text));
 
     prefixCount = 0;
     dxccCount = 0;
@@ -434,7 +434,7 @@ void QSOStats::loadCTY(const char* text)
         ptr = end + 1;
     }
 
-    Serial.printf("CTY loaded: %d prefixes\n", prefixCount);
+    Serial.printf("CTY loaded: %d prefixes\r\n", prefixCount);
 }// ---------------- DXCC ----------------
 
 int QSOStats::dxccFromCall(const char* call)
@@ -447,7 +447,7 @@ int QSOStats::dxccFromCall(const char* call)
     int bestLen = 0;
 
     for (int i = 0; i < prefixCount; i++) {
-        //Serial.printf("Checking prefix %s (DXCC %d) against call %s\n", prefixTable[i].prefix, prefixTable[i].dxcc, call);
+        //Serial.printf("Checking prefix %s (DXCC %d) against call %s\r\n", prefixTable[i].prefix, prefixTable[i].dxcc, call);
         int len = strlen(prefixTable[i].prefix);
 
         if (len <= bestLen) continue;
@@ -621,16 +621,16 @@ float QSOStats::computeScore(int dxcc, int snr, int band)
 void QSOStats::onQSOCompleted(const char* call, uint32_t freq_hz, uint32_t epoch)
 {
     int band = freqToBand(freq_hz);
-    Serial.printf("onQSOCompleted: freq_hz=%d, band=%d\n", freq_hz, band);  
+    Serial.printf("onQSOCompleted: freq_hz=%d, band=%d\r\n", freq_hz, band);  
     if (band < 0) return;
 
     int dxcc = dxccFromCall(call);
-    Serial.printf("onQSOCompleted: dxccFromCall returned %d from call=%s\n", dxcc, call);
+    Serial.printf("onQSOCompleted: dxccFromCall returned %d from call=%s\r\n", dxcc, call);
     if (dxcc < 0){ 
         return;
     };
 
-    Serial.printf("QSO Completed: call=%s, dxcc=%d, band=%d\n", call, dxcc, band);
+    Serial.printf("QSO Completed: call=%s, dxcc=%d, band=%d\r\n", call, dxcc, band);
     setBit(worked_dxcc, dxcc);
     setBit(worked_band[dxcc], band);
 
@@ -669,10 +669,10 @@ void QSOStats::makeFilename(int index, char* out, size_t len)
 bool QSOStats::readRecord(int index, void* out)
 {
     char path[32];
-    //Serial.printf("readRecord: Reading record at index %d\n", index);
+    //Serial.printf("readRecord: Reading record at index %d\r\n", index);
     makeFilename(index, path, sizeof(path));
 
-    // Serial.printf("Reading record from flash: %s\n", path);
+    // Serial.printf("Reading record from flash: %s\r\n", path);
     File f = LogsFS.open(path, "r");
     if (!f){ 
         Serial.println("Failed to open file"); 
@@ -731,7 +731,7 @@ void QSOStats::loadFromFlash()
 {
     Serial.println("Loading QSOStats from flash...");
     int idx = findLatestRecord();
-    Serial.printf("QSOStats: Latest QSOStats record index: %d\n", idx);
+    Serial.printf("QSOStats: Latest QSOStats record index: %d\r\n", idx);
     if (idx < 0) return;
 
     //StatsRecord rec;
@@ -861,7 +861,7 @@ int QSOStats::findLatestRecord()
 
     for (int i = 0; i < STATS_MAX_RECORDS; i++) {
 
-        // Serial.printf("findLatestRecord: Checking record index %d...\n", i);
+        // Serial.printf("findLatestRecord: Checking record index %d...\r\n", i);
         if (!readRecord(i, &rec)) continue;
 
         if (rec.magic == STATS_MAGIC &&

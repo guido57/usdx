@@ -68,11 +68,11 @@ public:
   void setDriveStrength(uint8_t strength)
   {
       // if (clk > 2){
-      //   Serial.printf("Invalid CLK%d for drive strength setting. CLK0..CLK2 only\n", clk);
+      //   Serial.printf("Invalid CLK%d for drive strength setting. CLK0..CLK2 only\r\n", clk);
       //   return;           // CLK0..CLK2 only
       // } 
       if (strength > 3){
-        Serial.printf("Invalid drive strength %u. Must be 0=2mA, 1=4mA, 2=6mA, or 3=8mA\n", strength); 
+        Serial.printf("Invalid drive strength %u. Must be 0=2mA, 1=4mA, 2=6mA, or 3=8mA\r\n", strength); 
         return;      // 0=2mA, 1=4mA, 2=6mA, 3=8mA
       }  
 
@@ -114,12 +114,12 @@ public:
     uint8_t rc = Wire.endTransmission();
 
     if (rc == 0) {
-      Serial.printf("[SI5351] I2C recovered at %s (prev=%u)\n", where, prev);
+      Serial.printf("[SI5351] I2C recovered at %s (prev=%u)\r\n", where, prev);
       return true;
     }
 
     _i2c_error = rc;
-    Serial.printf("[SI5351] I2C still failing at %s (prev=%u now=%u)\n", where, prev, rc);
+    Serial.printf("[SI5351] I2C still failing at %s (prev=%u now=%u)\r\n", where, prev, rc);
     return false;
   }
 
@@ -203,7 +203,7 @@ public:
       
       // Debug: print phase programming info
       uint16_t msa = fvcoa / fout;
-      Serial.printf("[SI5351] fout=%d Hz, d=%d, fvcoa=%d Hz, msa=%d, i_phase=%d deg, q_phase=%d deg, i_reg=%d, q_reg=%d\n", 
+      Serial.printf("[SI5351] fout=%d Hz, d=%d, fvcoa=%d Hz, msa=%d, i_phase=%d deg, q_phase=%d deg, i_reg=%d, q_reg=%d\r\n", 
                     fout, d, fvcoa, msa, i, q, i*msa/90, q*msa/90);
       
 #ifdef F_CLK2
@@ -346,7 +346,7 @@ static inline int32_t programSi5351Rx(SI5351& si5351, const Si5351RxSynthState& 
   // - CW : si5351.freq(freq + cw_offset, rx_ph_q, 0)
   // - RIT applied via freq_calc_fast() + SendPLLRegisterBulk()
   
-  Serial.printf("[programSi5351Rx] fxtal=%uHz vfo=%ldHz mode=%u rit=%d ritActive=%d cwOffset=%d iqPhase=%d driveStrength=%u\n",
+  Serial.printf("[programSi5351Rx] fxtal=%uHz vfo=%ldHz mode=%u rit=%d ritActive=%d cwOffset=%d iqPhase=%d driveStrength=%u\r\n",
                 s.fxtalHz, (long)s.vfoHz, s.mode, (int)s.rit, s.ritActive ? 1 : 0, (int)s.cwOffset, (int)s.iqPhase, s.driveStrength);
 
   // Use IQ phase from state structure
@@ -383,7 +383,7 @@ static inline int32_t programSi5351Rx(SI5351& si5351, const Si5351RxSynthState& 
     default: break;
   }
   Serial.printf(
-    "[SYNTH] mode=%s vfo=%ldHz cwOff=%d rit=%d (%s) -> prog=%ldHz\n",
+    "[SYNTH] mode=%s vfo=%ldHz cwOff=%d rit=%d (%s) -> prog=%ldHz\r\n",
     modeLabel,
     (long)baseFreq,
     (int)s.cwOffset,

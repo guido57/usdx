@@ -165,8 +165,8 @@ static void setup_time_once() {
     }
     struct tm timeinfo;
     if (getLocalTime(&timeinfo, 5000)) timeSynced = true;
-    printf("[Time] NTP time %s\n", timeSynced ? "synchronized" : "not synchronized");
-    printf("[Time] Current time: %04d-%02d-%02d %02d:%02d:%02d UTC\n",
+    printf("[Time] NTP time %s\r\n", timeSynced ? "synchronized" : "not synchronized");
+    printf("[Time] Current time: %04d-%02d-%02d %02d:%02d:%02d UTC\r\n",
            timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
            timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
 }
@@ -180,11 +180,11 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
   
   switch(type) {
     case WStype_DISCONNECTED:
-        Serial.printf("[WS] Client %u disconnected\n", num);
+        Serial.printf("[WS] Client %u disconnected\r\n", num);
         break;
         
     case WStype_CONNECTED:
-        Serial.printf("[WS] Client %u connected, IP: %s\n", num, wsServer.remoteIP(num).toString().c_str());
+        Serial.printf("[WS] Client %u connected, IP: %s\r\n", num, wsServer.remoteIP(num).toString().c_str());
         g_ft8ServerConnected = true;
         break;
         
@@ -192,17 +192,17 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
       len = min(length, (size_t)MAX_FT8_MSG-1);
       memcpy(msg, payload, len);
       msg[len] = 0;
-      //Serial.printf("[FT8] Received from client %u: %s\n", num, msg);
+      //Serial.printf("[FT8] Received from client %u: %s\r\n", num, msg);
       xQueueSend(ft8Queue, msg, 0);   // copy data
       break;
       
     case WStype_BIN:
       // Binary data from client (audio, etc.)
-      Serial.printf("[WS] Binary data from client %u, %u bytes\n", num, length);
+      Serial.printf("[WS] Binary data from client %u, %u bytes\r\n", num, length);
       break;
       
     case WStype_ERROR:
-        Serial.printf("[WS] Error on client %u\n", num);
+        Serial.printf("[WS] Error on client %u\r\n", num);
         break;
         
     case WStype_PONG:
@@ -406,7 +406,7 @@ static bool ethBeginWithReset() {
         ETH_PHY_RST,
         SPI);
 
-    Serial.printf("[ETH] ETH.begin returned: %s\n", ret ? "true" : "false");
+    Serial.printf("[ETH] ETH.begin returned: %s\r\n", ret ? "true" : "false");
     return ret;
 }
 
@@ -460,7 +460,7 @@ static void handleFt8Send() {
     }
 
     // then log on the WEB UI
-    //Serial.printf("[FT8] Send test at %d Hz: %s\n", freq, msg.c_str());
+    //Serial.printf("[FT8] Send test at %d Hz: %s\r\n", freq, msg.c_str());
     char buf[128];
     sprintf(buf,"{\"message\":\"[FT8] Send message at %d Hz: %s\"}", freq, txPlan.normalizedMsg);
     server.send(200, "application/json", buf);
@@ -801,15 +801,15 @@ static void startWebSocketServer() {
     uint16_t requestedPort = ui_get_ws_server_port();
     const uint16_t wsPort = 8765;
     if (requestedPort != wsPort) {
-        Serial.printf("[WS] Requested port %u, using fixed port %u\n", requestedPort, wsPort);
+        Serial.printf("[WS] Requested port %u, using fixed port %u\r\n", requestedPort, wsPort);
     }
-    Serial.printf("[WS] Starting WebSocket server on port %u\n", wsPort);
+    Serial.printf("[WS] Starting WebSocket server on port %u\r\n", wsPort);
 
     wsServer.onEvent(webSocketEvent);
     wsServer.begin();
     wsServerStarted = true;
     
-    Serial.printf("[WS] WebSocket server started on port 8765\n");
+    Serial.printf("[WS] WebSocket server started on port 8765\r\n");
 }
 
 
@@ -893,7 +893,7 @@ void NetworkTask(void* pvParameters) {
     vTaskDelay(pdMS_TO_TICKS(2000));
 
     if(!heap_caps_check_integrity_all(true)) {
-        ets_printf("!!! Corrupted heap before ETH init !!!\n");
+        ets_printf("!!! Corrupted heap before ETH init !!!\r\n");
     }
 
     auto* p = static_cast<TaskProfiler*>(pvParameters);
@@ -907,7 +907,7 @@ void NetworkTask(void* pvParameters) {
 
     // Initial bring-up (bounded wait, no infinite block)
     if (ethBeginWithReset() && ethWaitLinkAndIp(ETH_IP_WAIT_MS)) {
-        Serial.printf("[ETH] Connected, IP=%s\n", ETH.localIP().toString().c_str());
+        Serial.printf("[ETH] Connected, IP=%s\r\n", ETH.localIP().toString().c_str());
         ethConnected = true;
         RGB::ethernetLink(true);
         RGB::ipAssigned(true);
@@ -921,7 +921,7 @@ void NetworkTask(void* pvParameters) {
     if (!MDNS.begin(ui_get_ws_server_host())) {
         Serial.println("Error starting mDNS");
     } else {
-        Serial.printf("mDNS started: %s.local\n", ui_get_ws_server_host());
+        Serial.printf("mDNS started: %s.local\r\n", ui_get_ws_server_host());
     }
     startWebSocketServer();
     if(wsAudioStream.begin())
@@ -948,7 +948,7 @@ void NetworkTask(void* pvParameters) {
 
         if (ethHealthy) {
             if (!ethConnected) {
-                Serial.printf("[ETH] Recovered, IP=%s\n", ETH.localIP().toString().c_str());
+                Serial.printf("[ETH] Recovered, IP=%s\r\n", ETH.localIP().toString().c_str());
                 setup_time_once();
                 ethConnected = true;
                 RGB::ethernetLink(true);
@@ -976,7 +976,7 @@ void NetworkTask(void* pvParameters) {
                 Serial.println("[ETH] Reinitializing W5500...");
 
                 if (ethBeginWithReset() && ethWaitLinkAndIp(ETH_IP_WAIT_MS)) {
-                    Serial.printf("[ETH] Reinit OK, IP=%s\n", ETH.localIP().toString().c_str());
+                    Serial.printf("[ETH] Reinit OK, IP=%s\r\n", ETH.localIP().toString().c_str());
                     setup_time_once();
                     ethConnected = true;
                     ethDownSince = 0;
@@ -1011,7 +1011,7 @@ void NetworkTask(void* pvParameters) {
         uint8_t processedFt8Msgs = 0;
         while ( /* processedFt8Msgs < ft8Budget && */
                xQueueReceive(ft8Queue, ft8Msg, 0) == pdTRUE) {
-            //  Serial.printf("[FT8] Received FT8 message: %s\n", ft8Msg);    
+            //  Serial.printf("[FT8] Received FT8 message: %s\r\n", ft8Msg);    
             if (ui_get_ws_server_enabled()) {
                 addFt8SpotFromJson(ft8Msg);
             }
@@ -1061,16 +1061,16 @@ void WiFiNetworkTask(void* pvParameters) {
     vTaskDelay(2000 / portTICK_PERIOD_MS); 
 
     // Connect to WiFi
-    if(!heap_caps_check_integrity_all(true)) ets_printf("!!! Corrupted heap before WiFi.begin !!!\n");
+    if(!heap_caps_check_integrity_all(true)) ets_printf("!!! Corrupted heap before WiFi.begin !!!\r\n");
             
-    Serial.printf("[WiFi] Connecting to SSID: %s\n", SECRET_SSID);
+    Serial.printf("[WiFi] Connecting to SSID: %s\r\n", SECRET_SSID);
     WiFi.begin(SECRET_SSID, SECRET_PASS);
     // Wait for WiFi STA connection
     while(WiFi.status() != WL_CONNECTED) {
         vTaskDelay(500);
         Serial.print(".");
     }
-    Serial.printf("[WiFi] Connected, IP=%s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("[WiFi] Connected, IP=%s\r\n", WiFi.localIP().toString().c_str());
     setup_time_once();
 
     // ---- Setup time, mDNS, WebSocket server ----
@@ -1081,7 +1081,7 @@ void WiFiNetworkTask(void* pvParameters) {
     if (!MDNS.begin(ui_get_ws_server_host())) {
         Serial.println("Error starting mDNS");
     }else
-        Serial.printf("mDNS started: %s.local\n", ui_get_ws_server_host());
+        Serial.printf("mDNS started: %s.local\r\n", ui_get_ws_server_host());
 
     // Start WebSocket server
     startWebSocketServer();
@@ -1106,7 +1106,7 @@ void WiFiNetworkTask(void* pvParameters) {
 
         if(dt > 100000)
         {
-            Serial.printf("HTTP blocked for %.3f sec\n",
+            Serial.printf("HTTP blocked for %.3f sec\r\n",
                         dt / 1e6);
         }
 
@@ -1122,9 +1122,9 @@ void WiFiNetworkTask(void* pvParameters) {
             millis() - lastReconnectMs > 10000) {
             lastReconnectMs = millis();
             
-            ets_printf("[WiFi] Pre-reconnect heap check...\n");
+            ets_printf("[WiFi] Pre-reconnect heap check...\r\n");
             // If this fails, the heap was already corrupted BEFORE WiFi.begin
-            if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORRUPTED before WiFi.begin !!!\n");
+            if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORRUPTED before WiFi.begin !!!\r\n");
 
             ets_printf("[WiFi] Reconnecting...\r\n");
             WiFi.disconnect(true);
@@ -1139,7 +1139,7 @@ void WiFiNetworkTask(void* pvParameters) {
         if(WiFi.status() == WL_CONNECTED && staConnecting) {
             WiFi.setSleep(false);
             esp_wifi_set_ps(WIFI_PS_NONE);
-            ets_printf("[WiFi] Connected, IP=%s\n", WiFi.localIP().toString().c_str());
+            ets_printf("[WiFi] Connected, IP=%s\r\n", WiFi.localIP().toString().c_str());
             setup_time_once();
             // Start HTTP server
             startWebServer();
@@ -1174,7 +1174,7 @@ void WiFiNetworkTask(void* pvParameters) {
 
         //       size_t samplesToCopy = min((uint16_t)framePtr->n_samples, (uint16_t)WS_AUDIO_BUF_SAMPLES);
         //       memcpy(packet+16, framePtr->samples, samplesToCopy * 2);
-        //       // Serial.printf("[Audio] Sending frame with %d samples at %d Hz\n", framePtr->n_samples, framePtr->freq_hz);
+        //       // Serial.printf("[Audio] Sending frame with %d samples at %d Hz\r\n", framePtr->n_samples, framePtr->freq_hz);
         //       wsServer.broadcastBIN(packet, 16 + samplesToCopy * 2);
         //   }
         //   // Return frame to free pool
@@ -1188,7 +1188,7 @@ void WiFiNetworkTask(void* pvParameters) {
         //     if (xQueueReceive(adifQueue, &adifItem, 0) == pdTRUE) {
         //         size_t len = strnlen(adifItem.adif, sizeof(adifItem.adif));
 
-        //         Serial.printf("Sending ADIF len=%u: '%s'\n", len, adifItem.adif);
+        //         Serial.printf("Sending ADIF len=%u: '%s'\r\n", len, adifItem.adif);
         //         wsServer.broadcastTXT(adifItem.adif, len); 
         //     }
         // }
@@ -1203,7 +1203,7 @@ void WiFiNetworkTask(void* pvParameters) {
         uint8_t processedFt8Msgs = 0;
         while ( /* processedFt8Msgs < ft8Budget && */
                xQueueReceive(ft8Queue, ft8Msg, 0) == pdTRUE) {
-            //  Serial.printf("[FT8] Received FT8 message: %s\n", ft8Msg);    
+            //  Serial.printf("[FT8] Received FT8 message: %s\r\n", ft8Msg);    
             if (ui_get_ws_server_enabled()) {
                 addFt8SpotFromJson(ft8Msg);
             }
@@ -1227,7 +1227,7 @@ void WiFiNetworkTask(void* pvParameters) {
 
                 // Detect sudden drop (>10 dB)
                 if (rssi < lastRssi - 10) {
-                    Serial.printf("[WiFi] RSSI drop detected: %d -> %d dB\n", lastRssi, rssi);
+                    Serial.printf("[WiFi] RSSI drop detected: %d -> %d dB\r\n", lastRssi, rssi);
                 }
                 lastRssi = rssi;
 
@@ -1262,7 +1262,7 @@ void WiFiNetworkTask(void* pvParameters) {
 }
 
 void listLittleFS() {
-    Serial.println("\n--- LittleFS file list ---");
+    Serial.println("\r\n--- LittleFS file list ---");
 
     File root = LittleFS.open("/");
     File file = root.openNextFile();
@@ -1276,11 +1276,11 @@ void listLittleFS() {
         file = root.openNextFile();
     }
 
-    Serial.println("--------------------------\n");
+    Serial.println("--------------------------\r\n");
 }
 
 void listLogsFS() {
-    Serial.println("\n--- LogsFS file list ---");
+    Serial.println("\r\n--- LogsFS file list ---");
 
     File root = LogsFS.open("/");
     File file = root.openNextFile();
@@ -1294,7 +1294,7 @@ void listLogsFS() {
         file = root.openNextFile();
     }
 
-    Serial.println("--------------------------\n");
+    Serial.println("--------------------------\r\n");
 }
 // ===== Public Setup/Loop =====
 
@@ -1305,8 +1305,8 @@ void wifi_config_setup() {
     if(!LogsFS.begin(true, "/logs", 10, "logs")) 
         Serial.println("[FS] LogsFS mount failed");
 
-    Serial.printf("SPIFFS total: %d\n", LittleFS.totalBytes());
-    Serial.printf("SPIFFS used : %d\n", LittleFS.usedBytes());
+    Serial.printf("SPIFFS total: %d\r\n", LittleFS.totalBytes());
+    Serial.printf("SPIFFS used : %d\r\n", LittleFS.usedBytes());
     listLittleFS();
     listLogsFS();
 
@@ -1330,7 +1330,7 @@ void wifi_config_setup() {
 
     if(ft8Queue == NULL) ft8Queue = xQueueCreate(8,  MAX_FT8_MSG);
 
-    Serial.printf("Start network task on Core 0\n");
+    Serial.printf("Start network task on Core 0\r\n");
     xTaskCreatePinnedToCore(NetworkTask, "NET", 36000, &profilers[0], 2, NULL, 0); 
 }
 

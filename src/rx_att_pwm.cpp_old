@@ -25,5 +25,5 @@ void setRxAttFromUi(uint8_t uiVal)
 
     ledcWrite(RX_ATT_PWM_CH, duty);
 
-    //Serial.printf("RF ATT UI=%u  Vgate=%.2fV  duty=%u\n", uiVal, vGate, duty);
+    //Serial.printf("RF ATT UI=%u  Vgate=%.2fV  duty=%u\r\n", uiVal, vGate, duty);
 }

@@ -31,7 +31,7 @@ function parseCtyDat(text) {
     if (!block) continue;
 
     // normalize spaces
-    block = block.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ');
+    block = block.replace(/\r?\r\n/g, ' ').replace(/\s+/g, ' ');
 
     // Prefixes are after the last colon in each CTY block.
     const lastColon = block.lastIndexOf(':');
@@ -1090,7 +1090,7 @@ function showQsoLog(qsoId) {
 
         const rtx = e.rtx == 84 ? 'TX' : (e.rtx == 82 ? 'RX' : '??');
 
-        out += `${time} ${rtx.padEnd(3)} ${e.state.padEnd(18)} ${e.msg}\n`;
+        out += `${time} ${rtx.padEnd(3)} ${e.state.padEnd(18)} ${e.msg}\r\n`;
     }
 
     logEl.textContent = out;

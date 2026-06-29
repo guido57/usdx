@@ -21655,7 +21655,7 @@
 		(layer "Edge.Cuts")
 		(uuid "9af034ce-8724-4ca4-bbd5-7914f9f4815e")
 	)
-	(gr_text "TX OUT\n"
+	(gr_text "TX OUT\r\n"
 		(at 80 114.000001 0)
 		(layer "F.SilkS")
 		(uuid "ce66bd6f-d400-480b-925a-ea780c4b4961")
@@ -21667,7 +21667,7 @@
 			(justify left bottom)
 		)
 	)
-	(gr_text "W5500\n"
+	(gr_text "W5500\r\n"
 		(at 80.38 48 0)
 		(layer "F.SilkS")
 		(uuid "5ba0516f-b82f-4fcc-a96c-84031b7458ea")
@@ -21679,7 +21679,7 @@
 			(justify left bottom)
 		)
 	)
-	(gr_text "RX IN\n"
+	(gr_text "RX IN\r\n"
 		(at 80.5 150.5 0)
 		(layer "F.SilkS")
 		(uuid "12ed40e3-0d7d-4e73-b1d0-0760894166d9")
@@ -21691,7 +21691,7 @@
 			(justify left bottom)
 		)
 	)
-	(gr_text "PWR SWR\nMETER"
+	(gr_text "PWR SWR\r\nMETER"
 		(at 81 74 0)
 		(layer "F.SilkS")
 		(uuid "1d8f191e-48b2-4889-92c0-6e7d77da8d07")
@@ -21703,7 +21703,7 @@
 			(justify left bottom)
 		)
 	)
-	(gr_text "MCP23017\n"
+	(gr_text "MCP23017\r\n"
 		(at 81 81 0)
 		(layer "F.SilkS")
 		(uuid "05d5c81c-2821-4c67-a2b7-912f8a1d71fa")
@@ -21715,7 +21715,7 @@
 			(justify left bottom)
 		)
 	)
-	(gr_text "Button Right\n"
+	(gr_text "Button Right\r\n"
 		(at 212 49 0)
 		(layer "F.SilkS")
 		(uuid "c6d16c73-8aa9-4ca0-9282-a4f18473ef62")
@@ -21727,7 +21727,7 @@
 			(justify left bottom)
 		)
 	)
-	(gr_text "Button Left\n"
+	(gr_text "Button Left\r\n"
 		(at 213.5 137.5 0)
 		(layer "F.SilkS")
 		(uuid "89a3fb8f-378c-4c62-b997-01b299770d3f")
@@ -21739,7 +21739,7 @@
 			(justify left bottom)
 		)
 	)
-	(gr_text "ROT Freq\n"
+	(gr_text "ROT Freq\r\n"
 		(at 214.5 62 0)
 		(layer "F.SilkS")
 		(uuid "860d26b9-188c-4bb3-883f-4c7ba3a24df5")
@@ -21763,7 +21763,7 @@
 			(justify left bottom)
 		)
 	)
-	(gr_text "ROT Menu\n\n"
+	(gr_text "ROT Menu\r\n\r\n"
 		(at 214.5 135.5 0)
 		(layer "F.SilkS")
 		(uuid "47170258-b915-40d2-bab1-8e5f67806623")
@@ -21787,7 +21787,7 @@
 			(justify left bottom)
 		)
 	)
-	(gr_text "+19V\n"
+	(gr_text "+19V\r\n"
 		(at 76.5 36 0)
 		(layer "F.SilkS")
 		(uuid "ea52e6a3-08d4-4479-b3c5-27bc245649a4")
@@ -21800,7 +21800,7 @@
 			(justify left bottom)
 		)
 	)
-	(gr_text "FT8-ESP32 V1.1\nby Guido - IW5ALZ\n21/06/2026"
+	(gr_text "FT8-ESP32 V1.1\r\nby Guido - IW5ALZ\r\n21/06/2026"
 		(at 194 162.5 0)
 		(layer "F.SilkS")
 		(uuid "9611ea26-b63b-4e2f-a19f-4e7064beb1b1")

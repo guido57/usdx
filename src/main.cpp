@@ -241,7 +241,7 @@ static void processAudioPCM1808() {
       float elapsedSec = (si5351_now - lastReportMs) / 1000.0f;
       float rate = rawSampleCount / elapsedSec;
 
-      // Serial.printf("[ADC] Raw: %.1f Hz | Audio: %.1f Hz\n",
+      // Serial.printf("[ADC] Raw: %.1f Hz | Audio: %.1f Hz\r\n",
       //               rate, rate / 4.0f);
 
       rawSampleCount = 0;
@@ -269,7 +269,7 @@ static void processAudioPCM1808() {
 
 
           Serial.printf(
-            "[PEAK %s] IQ I=%5d Q=%5d | Aud=%5d | WS=%5d | OUT=%5d\n",
+            "[PEAK %s] IQ I=%5d Q=%5d | Aud=%5d | WS=%5d | OUT=%5d\r\n",
             alert ? "alert" : "warning",
             peakIDec,
             peakQDec,
@@ -311,7 +311,7 @@ static void processAudioToneOnlyBuffered() {
     const int MAX_SAMPLES_PER_CALL = 128;
     int samplesGenerated = 0;
 
-    // Serial.printf("Buffer fill: writeIndex=%d readIndex=%d\n", writeIndex, readIndex);
+    // Serial.printf("Buffer fill: writeIndex=%d readIndex=%d\r\n", writeIndex, readIndex);
     while (bufferCount() < AUDIO_BUFFER_SIZE - 256 && samplesGenerated < MAX_SAMPLES_PER_CALL){    
         
         int32_t sample = (int32_t)(cosf(phase) * 1023.0f * audioVolume);
@@ -332,7 +332,7 @@ static void processAudioToneOnlyBuffered() {
 
     // --- 2️⃣ Feed I2S DMA in blocks if enough samples ---
     const int dmaBlockSize = sizeof(dmaBlock) / sizeof(dmaBlock[0]);
-    //Serial.printf("DMA write: writeIndex=%d readIndex=%d\n", writeIndex, readIndex);
+    //Serial.printf("DMA write: writeIndex=%d readIndex=%d\r\n", writeIndex, readIndex);
     
     if (bufferCount() >= dmaBlockSize) {
 
@@ -349,10 +349,10 @@ static void processAudioToneOnlyBuffered() {
                                 portMAX_DELAY);
 
       if (err != ESP_OK) {
-          Serial.printf("i2s_write err=%d\n", err);
+          Serial.printf("i2s_write err=%d\r\n", err);
       }
       if(bytesWritten != dmaBlockSize * sizeof(int16_t)) {
-          Serial.printf("i2s_write incomplete: %d bytes written\n", bytesWritten);
+          Serial.printf("i2s_write incomplete: %d bytes written\r\n", bytesWritten);
       } 
     }
 }
@@ -427,7 +427,7 @@ static void processAudioPCM1808_simulatedIQ() {
         float elapsedSec = (si5351_now - lastReportMs) / 1000.0f;
         float rate = rawSampleCount / elapsedSec;
 
-        Serial.printf("[Sim IQ Stats] Raw Rate: %.1f Hz | Target: 32000 Hz | Audio Rate: %.1f Hz\n",
+        Serial.printf("[Sim IQ Stats] Raw Rate: %.1f Hz | Target: 32000 Hz | Audio Rate: %.1f Hz\r\n",
                       rate, rate / 4.0f);
 
         rawSampleCount = 0;
@@ -446,28 +446,28 @@ void setup() {
   RGB::startupTest();  
 
   // Test PSRAM availability
-  Serial.printf("\n=== Memory Status ===\n");
-  Serial.printf("Total heap: %u bytes\n", ESP.getHeapSize());
-  Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
-  Serial.printf("PSRAM size: %u bytes\n", ESP.getPsramSize());
-  Serial.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());
+  Serial.printf("\r\n=== Memory Status ===\r\n");
+  Serial.printf("Total heap: %u bytes\r\n", ESP.getHeapSize());
+  Serial.printf("Free heap: %u bytes\r\n", ESP.getFreeHeap());
+  Serial.printf("PSRAM size: %u bytes\r\n", ESP.getPsramSize());
+  Serial.printf("Free PSRAM: %u bytes\r\n", ESP.getFreePsram());
   
   if (ESP.getPsramSize() > 0) {
-    Serial.printf("PSRAM is available!\n");
+    Serial.printf("PSRAM is available!\r\n");
     // Try to allocate in PSRAM
     void* psram_test = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM);
     if (psram_test) {
-      Serial.printf("PSRAM allocation test: SUCCESS\n");
+      Serial.printf("PSRAM allocation test: SUCCESS\r\n");
       heap_caps_free(psram_test);
     } else {
-      Serial.printf("PSRAM allocation test: FAILED\n");
+      Serial.printf("PSRAM allocation test: FAILED\r\n");
     }
   } else {
-    Serial.printf("PSRAM is NOT available\n");
+    Serial.printf("PSRAM is NOT available\r\n");
   }
-  Serial.printf("=====================\n\n");
+  Serial.printf("=====================\r\n\r\n");
 
-  if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare Wire !!!\n");
+  if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare Wire !!!\r\n");
   
   Serial.printf("Initialize shared I2C bus once (OLED + SI5351 + MCP23017 use the same Wire instance).\r\n");
   Wire.begin(I2C_SDA, I2C_SCL,100000U);
@@ -490,26 +490,26 @@ void setup() {
     ui_get_sidrive()
   };
   
-  if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare UI !!!\n");
+  if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare UI !!!\r\n");
   
   Serial.printf("Initialize UI.\r\n");
   ui_setup();
 
   delay(500);
 
-  if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare SI5351 !!!\n");
+  if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di inizializzare SI5351 !!!\r\n");
   
   si5351.fxtal = si5351_now.fxtalHz;
   si5351.powerDown();
 
   const int32_t programmedHz = programSi5351Rx(si5351, si5351_now);
   if (si5351.i2cError() != 0) {
-    Serial.printf("SI5351 I2C error during programming: %u. Synth disabled.\n", si5351.i2cError());
+    Serial.printf("SI5351 I2C error during programming: %u. Synth disabled.\r\n", si5351.i2cError());
     synthInitialized = false;
     RGB::si5351(false);
     //return;
   }else {
-    Serial.printf("SI5351 programmed successfully.\n");
+    Serial.printf("SI5351 programmed successfully.\r\n");
     synthInitialized = true;
     RGB::si5351(true);
   }
@@ -519,7 +519,7 @@ void setup() {
   demod_init();
 
   // Start WiFi stack before ADC (this sequence was previously stable)
-  if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di chiamare wifi_config_setup() !!!\n");
+  if(!heap_caps_check_integrity_all(true)) ets_printf("!!! HEAP CORROTTO prima di chiamare wifi_config_setup() !!!\r\n");
   ft8tx.begin(); // Set FT8 TX base 
   wifi_config_setup();
   // delay(10000); // let WiFi task initialize before enabling ADC DMA
@@ -657,7 +657,7 @@ void loop() {
     float audioAvg = cycles ? audioTimeTotal / (float)cycles : 0;
 
     // Serial.printf(
-    //   "Loop: %lu Hz | ui_loop(): %.2f us | processAudioToneOnly(): %.2f us WiFi status=%d\n",
+    //   "Loop: %lu Hz | ui_loop(): %.2f us | processAudioToneOnly(): %.2f us WiFi status=%d\r\n",
     //   loopCount, uiAvg, audioAvg, WiFi.status());
 
     loopCount = 0;
@@ -706,11 +706,11 @@ void loop() {
     // set the right antenna filter
     if(lastSynth.vfoHz != si5351_now.vfoHz) {
       antFilters->setFilter(si5351_now.vfoHz);
-      Serial.printf("Antenna filter updated for frequency %u Hz\n", si5351_now.vfoHz);
+      Serial.printf("Antenna filter updated for frequency %u Hz\r\n", si5351_now.vfoHz);
     } 
 
     lastSynth = si5351_now;
-    printf("SI5351 reprogrammed due to UI change. freq=%u\n", si5351_now.vfoHz);  
+    printf("SI5351 reprogrammed due to UI change. freq=%u\r\n", si5351_now.vfoHz);  
   }
 
   // setRxAttFromUi((uint8_t)ui_get_att_rf());
@@ -725,7 +725,7 @@ void loop() {
   static unsigned long lastPwrswrReport = 0;
   if(millis() - lastPwrswrReport > 1000) {
     if(transmitting) {
-      Serial.printf("pwr=%.2f SWR=%.2f\n", pwrswrmeter->readPower(), pwrswrmeter->readSWR());
+      Serial.printf("pwr=%.2f SWR=%.2f\r\n", pwrswrmeter->readPower(), pwrswrmeter->readSWR());
     }else{
       
     }
@@ -749,7 +749,7 @@ void loop() {
     lastStatusMs = millis();
     uint16_t bestFreq =
         ft8FreqOptimizer.best_freq(ui_get_vfo_freq(), false, false);
-    // Serial.printf("[FT8 Freq Optimizer] Best frequency: %u Hz    it took %lu ms\n", bestFreq, millis() - lastStatusMs );      
+    // Serial.printf("[FT8 Freq Optimizer] Best frequency: %u Hz    it took %lu ms\r\n", bestFreq, millis() - lastStatusMs );      
   
   }
   qsoStats.periodicSave(millis());
@@ -760,11 +760,11 @@ void loop() {
 
   static unsigned long lastStatPrint = 0;
   // if(millis() - lastStatPrint > 10000) {
-  //   Serial.printf("p_ui->busy_us=%lu p_dsp->busy_us=%lu p_loop->busy_us=%lu\n", 
+  //   Serial.printf("p_ui->busy_us=%lu p_dsp->busy_us=%lu p_loop->busy_us=%lu\r\n", 
   //     p_ui->busy_us, p_dsp->busy_us, p_loop->busy_us);
-  //   Serial.printf("p_ui->loops=%lu p_dsp->loops=%lu p_loop->loops=%lu\n", 
+  //   Serial.printf("p_ui->loops=%lu p_dsp->loops=%lu p_loop->loops=%lu\r\n", 
   //     p_ui->loops, p_dsp->loops, p_loop->loops);
-  //   Serial.printf("UI avg: %.2f us | DSP avg: %.2f us | Loop avg: %.2f us\n", 
+  //   Serial.printf("UI avg: %.2f us | DSP avg: %.2f us | Loop avg: %.2f us\r\n", 
   //     p_ui->loops ? (float)p_ui->busy_us / p_ui->loops : 0,
   //     p_dsp->loops ? (float)p_dsp->busy_us / p_dsp->loops : 0,
   //     p_loop->loops ? (float)p_loop->busy_us / p_loop->loops : 0);    

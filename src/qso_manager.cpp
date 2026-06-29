@@ -20,19 +20,19 @@ void QSOManager::begin() {
         qsoMutex = xSemaphoreCreateMutex();
     }
 
-    Serial.printf("\n=== Memory Status before qso_list.reserve ===\n");
-    Serial.printf("Total heap: %u bytes\n", ESP.getHeapSize());
-    Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
-    Serial.printf("PSRAM size: %u bytes\n", ESP.getPsramSize());
-    Serial.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());
+    Serial.printf("\r\n=== Memory Status before qso_list.reserve ===\r\n");
+    Serial.printf("Total heap: %u bytes\r\n", ESP.getHeapSize());
+    Serial.printf("Free heap: %u bytes\r\n", ESP.getFreeHeap());
+    Serial.printf("PSRAM size: %u bytes\r\n", ESP.getPsramSize());
+    Serial.printf("Free PSRAM: %u bytes\r\n", ESP.getFreePsram());
   
     qso_list.reserve(100); // pre-allocate space for 100 QSOs to avoid fragmentation and improve performance
     
-    Serial.printf("\n=== Memory Status after qso_list.reserve ===\n");
-    Serial.printf("Total heap: %u bytes\n", ESP.getHeapSize());
-    Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
-    Serial.printf("PSRAM size: %u bytes\n", ESP.getPsramSize());
-    Serial.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());
+    Serial.printf("\r\n=== Memory Status after qso_list.reserve ===\r\n");
+    Serial.printf("Total heap: %u bytes\r\n", ESP.getHeapSize());
+    Serial.printf("Free heap: %u bytes\r\n", ESP.getFreeHeap());
+    Serial.printf("PSRAM size: %u bytes\r\n", ESP.getPsramSize());
+    Serial.printf("Free PSRAM: %u bytes\r\n", ESP.getFreePsram());
 
 }
 // ------------------------------------------------------------
@@ -261,7 +261,7 @@ String QSOManager::getAllQSOsJson() {
         const bool itemLooksComplete = (item.length() > 0 && item[item.length() - 1] == '}');
         if (qdoc.overflowed() || serializedLen == 0 || item.length() == 0 || serializedLen != expectedLen || !itemLooksComplete) {
             Serial.printf(
-            "getAllQSOsJson: stopping at qso_id=%d because item serialization failed (overflow=%d, expected=%u, bytes=%u, free_heap=%u, free_psram=%u)\n",
+            "getAllQSOsJson: stopping at qso_id=%d because item serialization failed (overflow=%d, expected=%u, bytes=%u, free_heap=%u, free_psram=%u)\r\n",
                 q.qso_id,
                 qdoc.overflowed() ? 1 : 0,
             (unsigned)expectedLen,
@@ -285,7 +285,7 @@ String QSOManager::getAllQSOsJson() {
     out += "]";
 
     if (serializedCount < snapshot.size()) {
-        Serial.printf("getAllQSOsJson: truncated output to %u/%u QSOs to keep JSON under %u bytes\n",
+        Serial.printf("getAllQSOsJson: truncated output to %u/%u QSOs to keep JSON under %u bytes\r\n",
                       (unsigned)serializedCount,
                       (unsigned)snapshot.size(),
                       (unsigned)JSON_SOFT_LIMIT);
@@ -389,7 +389,7 @@ void QSOManager::streamAllQSOsJson(WebServer &server) {
         if (!item) {
             skippedCount++;
             Serial.printf(
-                "streamAllQSOsJson: skip qso_id=%d due to OOM allocating %u bytes (free_heap=%u, free_psram=%u)\n",
+                "streamAllQSOsJson: skip qso_id=%d due to OOM allocating %u bytes (free_heap=%u, free_psram=%u)\r\n",
                 q.qso_id,
                 (unsigned)needed,
                 (unsigned)ESP.getFreeHeap(),
@@ -401,7 +401,7 @@ void QSOManager::streamAllQSOsJson(WebServer &server) {
         if (qdoc.overflowed() || serializedLen == 0) {
             skippedCount++;
             Serial.printf(
-                "streamAllQSOsJson: skip qso_id=%d due to serialization failure (overflow=%d, bytes=%u, free_heap=%u, free_psram=%u)\n",
+                "streamAllQSOsJson: skip qso_id=%d due to serialization failure (overflow=%d, bytes=%u, free_heap=%u, free_psram=%u)\r\n",
                 q.qso_id,
                 qdoc.overflowed() ? 1 : 0,
                 (unsigned)serializedLen,
@@ -450,7 +450,7 @@ void QSOManager::streamAllQSOsJson(WebServer &server) {
     server.sendContent("");
 
     if (skippedCount > 0) {
-        Serial.printf("streamAllQSOsJson: sent %u/%u objects, skipped=%u\n",
+        Serial.printf("streamAllQSOsJson: sent %u/%u objects, skipped=%u\r\n",
                       (unsigned)sentCount,
                       (unsigned)snapshot.size(),
                       (unsigned)skippedCount);
@@ -977,7 +977,7 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
         long ageSec = (timestamp - it->firstSeen);
         // Serial.printf("Checking if I can remove QSO %d with age %lu seconds, state %d, pending job: %s\r\n", it->qso_id, ageSec, it->state, pending_jobs ? "YES" : "NO");   
         if (it->state < QSO_DONE && pending_jobs == nullptr && ageSec > 300) {
-            // Serial.printf("Removing oldest (%lu secs) QSO %d with no pending job\n", ageSec, it->qso_id);
+            // Serial.printf("Removing oldest (%lu secs) QSO %d with no pending job\r\n", ageSec, it->qso_id);
             it = qso_list.erase(it);
         } else {
             ++it;
@@ -992,7 +992,7 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
         // for (auto it = qso_list.begin(); it != qso_list.end(); ++it) {
         //     FT8_TX::TxJob * pending_jobs = ft8tx.getNextPendingJob(it->qso_id);
         //     if (it->is_mine && it->state < QSO_DONE && pending_jobs == nullptr ) {
-        //         Serial.printf("Removing oldest mine QSO with no pending job %d\n", it->qso_id);
+        //         Serial.printf("Removing oldest mine QSO with no pending job %d\r\n", it->qso_id);
         //         qso_list.erase(it);
         //         removed = true;
         //         break;
@@ -1003,7 +1003,7 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
         if (!removed) {
             for (auto it = qso_list.begin(); it != qso_list.end(); ++it) {
                 if (!it->is_mine && it->state > QSO_CQ) { 
-                    Serial.printf("Removing oldest non-mine QSO %d\n", it->qso_id);
+                    Serial.printf("Removing oldest non-mine QSO %d\r\n", it->qso_id);
                     qso_list.erase(it);
                     removed = true;
                     break;
@@ -1016,7 +1016,7 @@ void QSOManager::processFt8Spot(const Ft8Spot &s) {
             for (auto it = qso_list.begin(); it != qso_list.end(); ++it) {
                 FT8_TX::TxJob * pending_jobs = ft8tx.getNextPendingJob(it->qso_id);
                 if (it->is_mine && pending_jobs == nullptr) { 
-                    Serial.printf("Removing oldest mine QSO %d\n", it->qso_id);
+                    Serial.printf("Removing oldest mine QSO %d\r\n", it->qso_id);
                     qso_list.erase(it);
                     removed = true;
                     break;
@@ -1176,9 +1176,9 @@ QSO * QSOManager::addOrUpdate(Ft8MsgType type, Ft8Fields &f, uint32_t timestamp,
         ) {
         
         // if(!qso){
-        //     Serial.printf("No existing QSO found for message, creating new QSO for call1=%s call2=%s...\n", f.call1, f.hasCall2 ? f.call2 : "N/A");
+        //     Serial.printf("No existing QSO found for message, creating new QSO for call1=%s call2=%s...\r\n", f.call1, f.hasCall2 ? f.call2 : "N/A");
         // } else if (qso && type <= MSG_CQ_TEST && qso->state == QSO_DONE){
-        //     Serial.printf("Existing QSO %d is completed, but received a new CQ message, creating new QSO for call1=%s call2=%s...\n", qso->qso_id, f.call1, f.hasCall2 ? f.call2 : "N/A");
+        //     Serial.printf("Existing QSO %d is completed, but received a new CQ message, creating new QSO for call1=%s call2=%s...\r\n", qso->qso_id, f.call1, f.hasCall2 ? f.call2 : "N/A");
         // }
         
 

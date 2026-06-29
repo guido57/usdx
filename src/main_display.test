@@ -12,7 +12,7 @@ void setup() {
   Serial.begin(115200);
   delay(3000);
 
-  Serial.println("\n=== SSD1309 OLED Test (Class) ===");
+  Serial.println("\r\n=== SSD1309 OLED Test (Class) ===");
 
   // Initialize shared I2C bus once
   Wire.begin(I2C_SDA, I2C_SCL);

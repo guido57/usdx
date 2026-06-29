@@ -109,12 +109,12 @@ void update()
     }
 
     // ---------------- fault chain (priority order) ----------------
-    if (!ethOK) { showBlink(RGB_BRIGHTNESS, 0, 0); return; }        // red
-    if (!ipOK)  { showBlink(RGB_BRIGHTNESS, RGB_BRIGHTNESS, 0); return; }      // yellow
-    // if (!mcpOK) { showBlink(RGB_BRIGHTNESS / 2, 0, RGB_BRIGHTNESS); return; }      // purple
-    if (!siOK)  { showBlink(RGB_BRIGHTNESS, 0, RGB_BRIGHTNESS); return; }      // magenta
-    if (!wsOK)  { showBlink(0, 0, RGB_BRIGHTNESS); return; }       // blue
-    show(0, 0, RGB_BRIGHTNESS);                                    // blue
+    if (!ethOK) { showBlink(RGB_BRIGHTNESS, 0, 0); return; }                        // red     
+    if (!ipOK)  { showBlink(RGB_BRIGHTNESS, RGB_BRIGHTNESS, 0); return; }           // yellow
+    // if (!mcpOK) { showBlink(RGB_BRIGHTNESS / 2, 0, RGB_BRIGHTNESS); return; }    // purple
+    if (!siOK)  { showBlink(RGB_BRIGHTNESS, 0, RGB_BRIGHTNESS); return; }           // magenta
+    if (!wsOK)  { showBlink(0, 0, RGB_BRIGHTNESS); return; }                        // blue
+    show(0, 0, RGB_BRIGHTNESS);                                                     // blue
 
 }      
 

@@ -29,7 +29,7 @@ void WiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
 void setup() {
     Serial.begin(115200);
     delay(2000);
-    Serial.println("\n--- WiFi Diagnostic Mode ---");
+    Serial.println("\r\n--- WiFi Diagnostic Mode ---");
 
     // 1. Setup Events
     WiFi.onEvent(WiFiEvent);
@@ -44,7 +44,7 @@ void setup() {
     esp_wifi_set_ps(WIFI_PS_NONE);
 
     // 4. Start Connection
-    Serial.printf("Connecting to %s...\n", ssid);
+    Serial.printf("Connecting to %s...\r\n", ssid);
     WiFi.begin(ssid, pass);
 }
 
@@ -54,8 +54,8 @@ void loop() {
     if (millis() - lastCheck > 5000) {
         lastCheck = millis();
         if (WiFi.status() == WL_CONNECTED) {
-            Serial.printf("Status: Connected | RSSI: %d dBm\n", WiFi.RSSI());
-            Serial.printf("[WiFi] Connected to AP MAC (BSSID): %s\n", WiFi.BSSIDstr().c_str());
+            Serial.printf("Status: Connected | RSSI: %d dBm\r\n", WiFi.RSSI());
+            Serial.printf("[WiFi] Connected to AP MAC (BSSID): %s\r\n", WiFi.BSSIDstr().c_str());
 
         } else {
             Serial.println("Status: Searching...");

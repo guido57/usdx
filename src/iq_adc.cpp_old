@@ -220,7 +220,7 @@ void iq_adc_restart() {
     // 4. Restart
     adc_digi_start();
     
-    Serial.printf("[IQ] ADC restarted\n");
+    Serial.printf("[IQ] ADC restarted\r\n");
 }
 
 void iq_adc_set_att_level(uint8_t level) {
@@ -260,5 +260,5 @@ void iq_adc_set_att_level(uint8_t level) {
     // 4. Restart
     adc_digi_start();
     
-    Serial.printf("[IQ] Attenuation changed to level %u\n", level);
+    Serial.printf("[IQ] Attenuation changed to level %u\r\n", level);
 }

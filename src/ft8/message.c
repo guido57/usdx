@@ -127,7 +127,7 @@ ftx_message_rc_t ftx_message_encode(ftx_message_t* msg, ftx_callsign_hash_interf
 
         // copy the next token temporarily (for the debug message)
         copy_token(call_de, 12, parse_position);
-        LOG(LOG_DEBUG, "next token after CQ: '%s' in '%s'\n", call_de, message_text);
+        LOG(LOG_DEBUG, "next token after CQ: '%s' in '%s'\r\n", call_de, message_text);
 
         // see if the word after CQ matches the a[bcd] or nnn pattern, and append to call_to
         int cq_modifier_v = parse_cq_modifier(message_text);
@@ -136,7 +136,7 @@ ftx_message_rc_t ftx_message_encode(ftx_message_t* msg, ftx_callsign_hash_interf
             // copy the CQ and then the next token to call_to
             memcpy(call_to, "CQ \0", 4);
             parse_position = copy_token(call_to + 3, sizeof(call_to) - 3, parse_position);
-            LOG(LOG_DEBUG, "CQ modifier encoding %d; parse_pos after CQ: %s in %s\n", cq_modifier_v, parse_position, message_text);
+            LOG(LOG_DEBUG, "CQ modifier encoding %d; parse_pos after CQ: %s in %s\r\n", cq_modifier_v, parse_position, message_text);
         } else {
             memcpy(call_to, "CQ\0", 3);
             // the next token should be call_de, which we will get below
@@ -150,7 +150,7 @@ ftx_message_rc_t ftx_message_encode(ftx_message_t* msg, ftx_callsign_hash_interf
     // and the word after that may be a grid or signal report
     parse_position = copy_token(extra, sizeof(extra), parse_position);
 
-    LOG(LOG_DEBUG, "ftx_message_encode: parsed '%s' '%s' '%s'; remaining chars '%s'\n", call_to, call_de, extra, parse_position);
+    LOG(LOG_DEBUG, "ftx_message_encode: parsed '%s' '%s' '%s'; remaining chars '%s'\r\n", call_to, call_de, extra, parse_position);
 
     if (call_to[sizeof(call_to) - 1] != '\0')
     {
@@ -174,16 +174,16 @@ ftx_message_rc_t ftx_message_encode(ftx_message_t* msg, ftx_callsign_hash_interf
         rc = ftx_message_encode_std(msg, hash_if, call_to, call_de, extra);
         if (rc == FTX_MESSAGE_RC_OK)
             return rc;
-        LOG(LOG_DEBUG, "   ftx_message_encode_std failed: %d\n", rc);
+        LOG(LOG_DEBUG, "   ftx_message_encode_std failed: %d\r\n", rc);
         rc = ftx_message_encode_nonstd(msg, hash_if, call_to, call_de, extra);
         if (rc == FTX_MESSAGE_RC_OK)
             return rc;
-        LOG(LOG_DEBUG, "   ftx_message_encode_nonstd failed: %d\n", rc);
+        LOG(LOG_DEBUG, "   ftx_message_encode_nonstd failed: %d\r\n", rc);
     }
     rc = ftx_message_encode_free(msg, message_text);
     if (rc == FTX_MESSAGE_RC_OK)
         return rc;
-    LOG(LOG_DEBUG, "   ftx_message_encode_free failed: %d\n", rc);
+    LOG(LOG_DEBUG, "   ftx_message_encode_free failed: %d\r\n", rc);
 
     return rc;
 }
@@ -192,11 +192,11 @@ ftx_message_rc_t ftx_message_encode_std(ftx_message_t* msg, ftx_callsign_hash_in
 {
     uint8_t ipa, ipb;
 
-    LOG(LOG_DEBUG, "ftx_message_encode_std '%s' '%s' '%s'\n", call_to, call_de, extra);
+    LOG(LOG_DEBUG, "ftx_message_encode_std '%s' '%s' '%s'\r\n", call_to, call_de, extra);
 
     int32_t n28a = pack28(call_to, hash_if, &ipa);
     int32_t n28b = pack28(call_de, hash_if, &ipb);
-    LOG(LOG_DEBUG, "   n29a = %d, n29b = %d\n", n28a, n28b);
+    LOG(LOG_DEBUG, "   n29a = %d, n29b = %d\r\n", n28a, n28b);
 
     if (n28a < 0)
         return FTX_MESSAGE_RC_ERROR_CALLSIGN1;
@@ -221,7 +221,7 @@ ftx_message_rc_t ftx_message_encode_std(ftx_message_t* msg, ftx_callsign_hash_in
     }
 
     uint16_t igrid4 = packgrid(extra);
-    LOG(LOG_DEBUG, "igrid4 = %d\n", igrid4);
+    LOG(LOG_DEBUG, "igrid4 = %d\r\n", igrid4);
 
     // Shift in ipa and ipb bits into n28a and n28b
     uint32_t n29a = ((uint32_t)n28a << 1) | ipa;
@@ -255,7 +255,7 @@ ftx_message_rc_t ftx_message_encode_nonstd(ftx_message_t* msg, ftx_callsign_hash
 {
     uint8_t i3 = 4;
 
-    LOG(LOG_DEBUG, "ftx_message_encode_nonstd '%s' '%s' '%s'\n", call_to, call_de, extra);
+    LOG(LOG_DEBUG, "ftx_message_encode_nonstd '%s' '%s' '%s'\r\n", call_to, call_de, extra);
 
     uint8_t icq = (uint8_t)equals(call_to, "CQ") || starts_with(call_to, "CQ ");
     int len_call_to = strlen(call_to);
@@ -295,7 +295,7 @@ ftx_message_rc_t ftx_message_encode_nonstd(ftx_message_t* msg, ftx_callsign_hash
         iflip = 0;
         n12 = 0;
         call58 = call_de;
-        LOG(LOG_DEBUG, "CQ: 58-bit '%s'; omitting grid '%s'\n", call58, extra);
+        LOG(LOG_DEBUG, "CQ: 58-bit '%s'; omitting grid '%s'\r\n", call58, extra);
     }
 
     if (!pack58(hash_if, call58, &n58))
@@ -477,7 +477,7 @@ ftx_message_rc_t ftx_message_decode_std(const ftx_message_t* msg, ftx_callsign_h
 
     // Extract i3 (bits 74..76)
     uint8_t i3 = (msg->payload[9] >> 3) & 0x07u;
-    LOG(LOG_DEBUG, "decode_std() n28a=%d ipa=%d n28b=%d ipb=%d ir=%d igrid4=%d i3=%d\n", n29a >> 1, n29a & 1u, n29b >> 1, n29b & 1u, ir, igrid4, i3);
+    LOG(LOG_DEBUG, "decode_std() n28a=%d ipa=%d n28b=%d ipb=%d ir=%d igrid4=%d i3=%d\r\n", n29a >> 1, n29a & 1u, n29b >> 1, n29b & 1u, ir, igrid4, i3);
 
     call_to[0] = call_de[0] = extra[0] = '\0';
 
@@ -495,7 +495,7 @@ ftx_message_rc_t ftx_message_decode_std(const ftx_message_t* msg, ftx_callsign_h
         return FTX_MESSAGE_RC_ERROR_GRID;
     }
 
-    LOG(LOG_INFO, "Decoded standard (type %d) message [%s] [%s] [%s]\n", i3, call_to, call_de, extra);
+    LOG(LOG_INFO, "Decoded standard (type %d) message [%s] [%s] [%s]\r\n", i3, call_to, call_de, extra);
     return FTX_MESSAGE_RC_OK;
 }
 
@@ -524,7 +524,7 @@ ftx_message_rc_t ftx_message_decode_nonstd(const ftx_message_t* msg, ftx_callsig
 
     // Extract i3 (bits 74..76)
     uint8_t i3 = (msg->payload[9] >> 3) & 0x07u;
-    LOG(LOG_DEBUG, "decode_nonstd() n12=%04x n58=%08llx iflip=%d nrpt=%d icq=%d i3=%d\n", n12, n58, iflip, nrpt, icq, i3);
+    LOG(LOG_DEBUG, "decode_nonstd() n12=%04x n58=%08llx iflip=%d nrpt=%d icq=%d i3=%d\r\n", n12, n58, iflip, nrpt, icq, i3);
 
     // Decode one of the calls from 58 bit encoded string
     char call_decoded[14];
@@ -572,7 +572,7 @@ ftx_message_rc_t ftx_message_decode_nonstd(const ftx_message_t* msg, ftx_callsig
     }
     strcpy(call_de, call_2);
     field_types[1] = FTX_FIELD_CALL;
-    LOG(LOG_INFO, "Decoded non-standard (type %d) message [%s] [%s] [%s]\n", i3, call_to, call_de, extra);
+    LOG(LOG_INFO, "Decoded non-standard (type %d) message [%s] [%s] [%s]\r\n", i3, call_to, call_de, extra);
     return FTX_MESSAGE_RC_OK;
 }
 
@@ -679,7 +679,7 @@ static bool save_callsign(const ftx_callsign_hash_interface_t* hash_if, const ch
     uint32_t n22 = ((47055833459ull * n58) >> (64 - 22)) & (0x3FFFFFul);
     uint32_t n12 = n22 >> 10;
     uint32_t n10 = n22 >> 12;
-    LOG(LOG_DEBUG, "save_callsign('%s') = [n22=%d, n12=%d, n10=%d]\n", callsign, n22, n12, n10);
+    LOG(LOG_DEBUG, "save_callsign('%s') = [n22=%d, n12=%d, n10=%d]\r\n", callsign, n22, n12, n10);
 
     if (n22_out != NULL)
         *n22_out = n22;
@@ -712,7 +712,7 @@ static bool lookup_callsign(const ftx_callsign_hash_interface_t* hash_if, ftx_ca
     {
         add_brackets(callsign, c11, strlen(c11));
     }
-    LOG(LOG_DEBUG, "lookup_callsign(n%s=%d) = '%s'\n", (hash_type == FTX_CALLSIGN_HASH_22_BITS ? "22" : (hash_type == FTX_CALLSIGN_HASH_12_BITS ? "12" : "10")), hash, callsign);
+    LOG(LOG_DEBUG, "lookup_callsign(n%s=%d) = '%s'\r\n", (hash_type == FTX_CALLSIGN_HASH_22_BITS ? "22" : (hash_type == FTX_CALLSIGN_HASH_12_BITS ? "12" : "10")), hash, callsign);
     return found;
 }
 
@@ -761,7 +761,7 @@ int32_t pack_basecall(const char* callsign, int length)
         if ((i0 >= 0) && (i1 >= 0) && (i2 >= 0) && (i3 >= 0) && (i4 >= 0) && (i5 >= 0))
         {
             // This is a standard callsign
-            LOG(LOG_DEBUG, "Encoding basecall [%.6s]\n", c6);
+            LOG(LOG_DEBUG, "Encoding basecall [%.6s]\r\n", c6);
             int32_t n = i0;
             n = n * 36 + i1;
             n = n * 10 + i2;
@@ -795,13 +795,13 @@ static int parse_cq_modifier(const char* string)
             return -1;
         }
     }
-    LOG(LOG_DEBUG, "CQ_nnn/CQ_a[bcd] '%s' %d/%d\n", string, nnum, nlet);
+    LOG(LOG_DEBUG, "CQ_nnn/CQ_a[bcd] '%s' %d/%d\r\n", string, nnum, nlet);
     if (nnum == 3 && nlet == 0) {
-        LOG(LOG_DEBUG, "CQ_nnn detected: %d\n", atoi(string + 3));
+        LOG(LOG_DEBUG, "CQ_nnn detected: %d\r\n", atoi(string + 3));
         return atoi(string + 3);
     }
     else if (nnum == 0 && nlet <= 4) {
-        LOG(LOG_DEBUG, "CQ_a[bcd] detected: m %d\n", m);
+        LOG(LOG_DEBUG, "CQ_a[bcd] detected: m %d\r\n", m);
         return 1000 + m;
     }
     return -1; // not a special CQ
@@ -809,7 +809,7 @@ static int parse_cq_modifier(const char* string)
 
 static int32_t pack28(const char* callsign, const ftx_callsign_hash_interface_t* hash_if, uint8_t* ip)
 {
-    LOG(LOG_DEBUG, "pack28() callsign [%s]\n", callsign);
+    LOG(LOG_DEBUG, "pack28() callsign [%s]\r\n", callsign);
     *ip = 0;
 
     // Check for special tokens first
@@ -821,13 +821,13 @@ static int32_t pack28(const char* callsign, const ftx_callsign_hash_interface_t*
         return 2;
 
     int length = strlen(callsign);
-    LOG(LOG_DEBUG, "Callsign length = %d\n", length);
+    LOG(LOG_DEBUG, "Callsign length = %d\r\n", length);
 
     if (starts_with(callsign, "CQ ") && length < 8)
     {
         int v = parse_cq_modifier(callsign);
         if (v < 0) {
-            LOG(LOG_WARN, "CQ_nnn/CQ_a[bcd] '%s' not allowed\n", callsign);
+            LOG(LOG_WARN, "CQ_nnn/CQ_a[bcd] '%s' not allowed\r\n", callsign);
             return -1;
         }
         return 3 + v;
@@ -837,7 +837,7 @@ static int32_t pack28(const char* callsign, const ftx_callsign_hash_interface_t*
     int length_base = length;
     if (ends_with(callsign, "/P") || ends_with(callsign, "/R"))
     {
-        LOG(LOG_DEBUG, "Suffix /P or /R detected\n");
+        LOG(LOG_DEBUG, "Suffix /P or /R detected\r\n");
         *ip = 1;
         length_base = length - 2;
     }
@@ -854,10 +854,10 @@ static int32_t pack28(const char* callsign, const ftx_callsign_hash_interface_t*
     if ((length >= 3) && (length <= 11))
     {
         // Treat this as a nonstandard callsign: compute its 22-bit hash
-        LOG(LOG_DEBUG, "Encoding '%s' as non-standard callsign\n", callsign);
+        LOG(LOG_DEBUG, "Encoding '%s' as non-standard callsign\r\n", callsign);
         uint32_t n22;
         if (!save_callsign(hash_if, callsign, &n22, NULL, NULL)) {
-            LOG(LOG_DEBUG, "   Failed to save '%s'\n", callsign);
+            LOG(LOG_DEBUG, "   Failed to save '%s'\r\n", callsign);
             return -1; // Error (some problem with callsign contents)
         }
         *ip = 0;
@@ -869,7 +869,7 @@ static int32_t pack28(const char* callsign, const ftx_callsign_hash_interface_t*
 
 static int unpack28(uint32_t n28, uint8_t ip, uint8_t i3, const ftx_callsign_hash_interface_t* hash_if, char* result, ftx_field_t* field_type)
 {
-    LOG(LOG_DEBUG, "unpack28() n28=%d i3=%d\n", n28, i3);
+    LOG(LOG_DEBUG, "unpack28() n28=%d i3=%d\r\n", n28, i3);
     // Check for special tokens DE, QRZ, CQ, CQ nnn, CQ a[bcd]
     if (n28 < NTOKENS)
     {
@@ -1016,7 +1016,7 @@ static bool pack58(const ftx_callsign_hash_interface_t* hash_if, const char* cal
         return false;
 
     *n58 = result;
-    LOG(LOG_DEBUG, "pack58('%s')=%016llx\n", callsign, *n58);
+    LOG(LOG_DEBUG, "pack58('%s')=%016llx\r\n", callsign, *n58);
     return true;
 }
 
@@ -1036,7 +1036,7 @@ static bool unpack58(uint64_t n58, const ftx_callsign_hash_interface_t* hash_if,
     // The decoded string will be right-aligned, so trim all whitespace (also from back just in case)
     trim_copy(callsign, c11);
 
-    LOG(LOG_DEBUG, "unpack58(%016llx)=%s\n", n58_backup, callsign);
+    LOG(LOG_DEBUG, "unpack58(%016llx)=%s\r\n", n58_backup, callsign);
 
     // Save the decoded call in a hash table for later
     if (strlen(callsign) >= 3)
